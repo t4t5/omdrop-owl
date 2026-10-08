@@ -7,6 +7,8 @@
 #   omdrop-discoverable stop               stop advertising, tear down
 #   omdrop-discoverable status [--json]    {"visible":bool,"remaining":int|null,"reason":str,"rx_proven":bool,"peer_op":str}
 #   omdrop-discoverable peers              "<mac> rssi=?" per AWDL peer
+#   omdrop-discoverable probe --json       what this backend is and what blocks it
+#                                          (unprivileged; omdrop's docs/radio-backend.md)
 #
 # The same contract as omdrop-awdl's helper, which the omdrop CLI and
 # send-to-peer call against. Exit codes:
@@ -42,6 +44,14 @@ OWL_BIN=$LIB/owl
 # 0x88 (OpenDrop's: SUPPORTS_MIXED_TYPES | SUPPORTS_DISCOVER_MAYBE) + SUPPORTS_URL.
 ADV_FLAGS=137
 ADV_INTERVAL=3
+VERSION=0.1.0
+# The omdrop-awdl helper contract this follows, which is also the version of
+# omdrop-awdl's tools staged beside it.
+CONTRACT=0.7.0
+# Wi-Fi drivers this has been tested on. Other mac80211 cards that can inject
+# from a monitor interface while associated may work too: $CONF/allow-untested
+# containing 1 lets them through.
+TESTED_DRIVERS="mt7925e"
 
 # status and peers run without root, so logging must fail quietly.
 log() { { mkdir -p "$RUN" && printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$*" >> "$RUN/log"; } 2>/dev/null || true; }
@@ -112,6 +122,38 @@ cmd_peers() {
       gsub(/ /, "0", mac)
       if ($1 == "add") seen[mac] = 1; else delete seen[mac] }
     END { for (m in seen) print m " rssi=?" }'
+}
+
+# ---------------------------------------------------------------------- probe
+
+# What omdrop's doctor shows: the backend, and what stands in the way, most
+# fundamental first. Unprivileged, so nothing here may need root.
+cmd_probe() {
+  local sta drv hw=true ap missing=()
+  sta=$(station_iface)
+  drv=$( [ -n "$sta" ] && basename "$(readlink -f "/sys/class/net/$sta/device/driver")" 2>/dev/null )
+  if [ -z "$sta" ]; then
+    hw=false
+    missing+=("hardware|This computer has no Wi-Fi interface that omdrop-owl can use.")
+  elif [[ " $TESTED_DRIVERS " != *" $drv "* ]] && [ "$(knob allow-untested)" != 1 ]; then
+    hw=false
+    missing+=("hardware|omdrop-owl has only been tested on MediaTek MT7925 Wi-Fi, and this computer's is ${drv:-unknown}. To try it anyway, put 1 in $CONF/allow-untested.")
+  else
+    [ -x "$OWL_BIN" ] || missing+=("backend|omdrop-owl is installed without OWL ($OWL_BIN). Reinstall omdrop-owl.")
+    ap=$(iw dev "$sta" link 2>/dev/null | awk '/freq:/ {print int($2)}')
+    case "$ap" in
+      2437|5220|5745) ;;
+      "") missing+=("radio|Wi-Fi isn't connected, and AirDrop shares its channel. Connect to Wi-Fi first.") ;;
+      *) missing+=("radio|Your Wi-Fi network is on $ap MHz, but AirDrop can only share channel 6, 44 or 149 with it. Moving the router to one of those makes this work.") ;;
+    esac
+  fi
+  [ "${1:-}" = --json ] || { printf '%s\n' "${missing[@]:-ready}"; return 0; }
+  MISSING=$(printf '%s\n' "${missing[@]}") HW=$hw V=$VERSION C=$CONTRACT python3 -c '
+import json, os
+rows = [l.split("|", 1) for l in os.environ["MISSING"].split("\n") if l.strip()]
+print(json.dumps({"backend": "owl", "version": os.environ["V"], "contract": os.environ["C"],
+                  "hardware": os.environ["HW"] == "true",
+                  "missing": [{"id": r[0], "say": r[1]} for r in rows]}))'
 }
 
 # ----------------------------------------------------------------------- stop
@@ -256,6 +298,7 @@ case "${1:-}" in
   stop)   cmd_stop "${2:-stopped}" ;;
   status) shift; cmd_status "$@" ;;
   peers)  cmd_peers ;;
+  probe)  shift; cmd_probe "$@" ;;
   __supervise) supervise ;;
-  *) die "usage: omdrop-discoverable start <seconds> | stop | status [--json] | peers" 2 ;;
+  *) die "usage: omdrop-discoverable start <seconds> | stop | status [--json] | peers | probe [--json]" 2 ;;
 esac

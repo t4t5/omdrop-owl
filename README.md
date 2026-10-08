@@ -46,6 +46,7 @@ how they ship is a packaging decision to make deliberately.
   deleted, until `mt7925e` is reloaded. linux-airdrop's test 15 reproduced it
   with a bare monitor vif and nothing else, so it's an mt76/firmware bug.
   omdrop's contract forbids the radio helper from reloading the driver, so
-  `stop` has to tear down in a way that avoids it; test 15's phases N and R
-  compare candidates. `stop` currently forces a reconnect (N).
+  `stop` has to tear down in a way that avoids it. Forcing a reconnect right
+  after the delete (test 15's phase N, what `stop` does) and reconnecting
+  around the delete (phase R) both avoided it for 240 s, one run each.
 - Sending is ~490 kB/s, receiving ~1.3 MB/s, limited by OWL's injection path.
