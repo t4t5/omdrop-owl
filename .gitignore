@@ -1,0 +1,4 @@
+# Fetched at a pinned commit by tools/stage.sh; never committed (GPL-2.0-only).
+/upstream/
+# The assembled runtime directory.
+/build/

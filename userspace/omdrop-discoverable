@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# omdrop-discoverable for OWL: the radio half of omdrop on cards without
+# Apple's Broadcom firmware (first target: MediaTek MT7925), where AWDL runs in
+# userspace through OWL on a monitor interface.
+#
+# Same contract as omdrop-awdl's helper, which the omdrop CLI and send-to-peer
+# call against:
+#   omdrop-discoverable start <seconds>    become discoverable for N seconds
+#   omdrop-discoverable stop               stop advertising, tear down
+#   omdrop-discoverable status [--json]    {"visible":bool,"remaining":int|null,"reason":str,...}
+#   omdrop-discoverable peers              "<mac> rssi=<n>" per AWDL peer
+# Exit codes: 0 ok, 2 usage or not root, 3 data path parked, 4 awdl0 absent,
+# 5 already discoverable.
+#
+# Only `peers` exists so far: start, stop and status come next, ported from
+# linux-airdrop's lib/awdl.sh once the spike there has shown omdrop's receiver
+# and sender work over OWL.
+set -uo pipefail
+
+# Fixed paths: callers reach us through pkexec, which drops the environment, so
+# an override variable set by the caller never arrives. These are for running
+# the helper by hand.
+RUN=${OMDROP_OWL_RUN:-/run/omdrop-owl}
+OWL_LOG=${OMDROP_OWL_LOG:-$RUN/owl.log}
+
+die() { echo "omdrop-discoverable: $1" >&2; exit "${2:-2}"; }
+
+# OWL logs "add peer <mac> (<name>)" and "remove peer <mac> (<name>)" at INFO,
+# with ether_ntoa's unpadded octets (86:8:4:8a:2b:f4), and adds each peer as a
+# permanent IPv6 neighbour on awdl0, which send-to-peer merges in as well. The
+# signal strength is only in OWL's TRACE output, so it is reported as unknown;
+# send-to-peer and the omdrop CLI both list such peers as "? dBm".
+cmd_peers() {
+  [ -r "$OWL_LOG" ] || die "no OWL log at $OWL_LOG; is the radio up?" 4
+  grep -oE '(add|remove) peer [0-9a-f:]+' "$OWL_LOG" | awk '
+    { n = split($3, o, ":"); mac = ""
+      for (i = 1; i <= n; i++) mac = mac (i > 1 ? ":" : "") sprintf("%02s", o[i])
+      gsub(/ /, "0", mac)
+      if ($1 == "add") seen[mac] = 1; else delete seen[mac] }
+    END { for (m in seen) print m " rssi=?" }'
+}
+
+case "${1:-}" in
+  peers) cmd_peers ;;
+  start|stop|status) die "$1 is not implemented yet (spike stage); bring the radio up with linux-airdrop's lib/awdl.sh" 2 ;;
+  *) die "usage: omdrop-discoverable start <seconds> | stop | status [--json] | peers" 2 ;;
+esac
