@@ -56,7 +56,14 @@ TESTED_DRIVERS="mt7925e"
 log() { { mkdir -p "$RUN" && printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$*" >> "$RUN/log"; } 2>/dev/null || true; }
 die() { log "error: $1"; echo "omdrop-discoverable: $1" >&2; exit "${2:-2}"; }
 knob() { head -1 "$CONF/$1" 2>/dev/null | tr -d '[:space:]' || true; }
-alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
+# Through /proc, not kill -0: omdrop runs `status` without root, and an
+# unprivileged kill -0 on these root-owned processes fails with EPERM, which
+# read as "not running" and left the panel on "Waking the radio" for a whole
+# window. The command line has to match too, so a recycled pid doesn't pass.
+alive() {  # PID [PATTERN]
+  [ -n "$1" ] && [ -r "/proc/$1/cmdline" ] \
+    && { [ -z "${2:-}" ] || tr '\0' ' ' < "/proc/$1/cmdline" | grep -qF -- "$2"; }
+}
 pid_of() { cat "$RUN/$1.pid" 2>/dev/null; }
 need_root() { [ "$(id -u)" = 0 ] || die "must run as root (through pkexec)" 2; }
 
@@ -80,7 +87,7 @@ mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/c
 # --------------------------------------------------------------------- status
 
 visible() {
-  alive "$(pid_of supervisor)" && alive "$(pid_of owl)" \
+  alive "$(pid_of supervisor)" __supervise && alive "$(pid_of owl)" "$OWL_BIN" \
     && ip -6 addr show dev "$IF" scope link 2>/dev/null | grep -q inet6 \
     && ! ip -6 addr show dev "$IF" scope link | grep -q tentative
 }
@@ -166,7 +173,7 @@ cmd_stop() {
   # The supervisor calls `stop expired` itself; don't kill the caller.
   [ -n "$sup" ] && [ "$sup" != "$$" ] && [ "$sup" != "${PPID:-}" ] && kill "$sup" 2>/dev/null
   pkill -f -- "$LIB/awdl-airdrop-adv.py" 2>/dev/null
-  alive "$(pid_of owl)" && kill "$(pid_of owl)" 2>/dev/null
+  alive "$(pid_of owl)" "$OWL_BIN" && kill "$(pid_of owl)" 2>/dev/null
   pkill -f "^$OWL_BIN " 2>/dev/null
   ip link set "$MON" down 2>/dev/null
   iw dev "$MON" del 2>/dev/null
@@ -202,7 +209,7 @@ supervise() {
       log "window expired"
       exec "$SELF" stop expired
     fi
-    if ! alive "$(pid_of owl)"; then
+    if ! alive "$(pid_of owl)" "$OWL_BIN"; then
       log "OWL exited: $(tail -1 "$OWL_LOG" 2>/dev/null)"
       exec "$SELF" stop owl-exited
     fi
@@ -221,7 +228,7 @@ cmd_start() {
   flock 9
   [ -x "$OWL_BIN" ] || die "OWL is not installed at $OWL_BIN" 4
 
-  if alive "$(pid_of supervisor)"; then
+  if alive "$(pid_of supervisor)" __supervise; then
     if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
     log "already discoverable; window now ${secs}s"
     exit 5
