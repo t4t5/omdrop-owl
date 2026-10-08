@@ -2,51 +2,74 @@
 
 The radio half of [omdrop](https://github.com/brentkearney/omdrop-plugin) for
 machines without Apple's Broadcom Wi-Fi. AWDL runs in userspace through
-[OWL](https://github.com/jedbillyb/owl) on a monitor interface. First target: the
-MediaTek MT7925 in a Framework 13, where AirDrop works in both directions with
-Wi-Fi staying connected (see
-[linux-airdrop](../linux-airdrop/README.md) for the research and measurements).
+[OWL](https://github.com/jedbillyb/owl) on a monitor interface, and omdrop's own
+receiver and sender run over it unchanged. First target: the MediaTek MT7925
+(`mt7925e`), as in the Framework 13, where AirDrop works in both directions
+while Wi-Fi stays connected.
 
 It is a sibling of [omdrop-awdl](https://github.com/brentkearney/omdrop-awdl),
 the Broadcom radio package, and plugs into omdrop the same way: helpers in
-`/usr/lib/omdrop` that the omdrop CLI and panel call.
+`/usr/lib/omdrop` that the omdrop CLI and panel call. The contract is described
+in omdrop's `docs/radio-backend.md`.
+
+## How it works
+
+The Wi-Fi station stays associated, and AWDL shares its channel:
+
+1. **AWDL runs on the access point's own channel**, which has to be 6, 44 or
+   149 (AWDL's channels). An iPhone spends a large share of its AWDL time slots
+   on those channels, so the radio never has to leave the AP.
+2. **A monitor interface carries the station's MAC**, and OWL runs on it with
+   `-S intersect`, advertising only the phone's slots on that channel.
+3. **The MT7925 sends injected frames from the station's MAC regardless**, and
+   the station interface ACKs the phone's unicast to that MAC, so no "active"
+   monitor interface is needed.
+4. OWL creates `awdl0`. omdrop's receiver binds to it, and omdrop-awdl's
+   `awdl-airdrop-adv.py --plain` announces `_airdrop._tcp` on it every few
+   seconds (`--plain`, because OWL adds the AWDL encapsulation itself).
 
 ## Layout
 
 ```
-userspace/omdrop-discoverable   ours: the radio helper, OWL-based, same
-                                contract as omdrop-awdl's
+userspace/omdrop-discoverable   the radio helper (start, stop, status, peers, probe)
+patches/owl-*.patch             our changes to OWL, applied in name order
+tools/build-owl.sh              builds OWL at a pinned commit, with the patches
 tools/stage.sh                  assembles build/lib, laid out like /usr/lib/omdrop
-build/lib/                      (generated) ours + omdrop-awdl's radio-independent tools
-upstream/omdrop-awdl/           (generated) fetched at a pinned commit
+build/lib/                      (generated) ours, OWL, and omdrop-awdl's portable tools
+upstream/                       (generated) OWL and omdrop-awdl at pinned commits
 ```
 
-From omdrop-awdl we reuse, unmodified, everything that only talks to `awdl0`
-or BlueZ: `send-to-peer`, `airdrop-send.py`, `ble-airdrop-adv.py`,
-`awdl-airdrop-adv.py`, `awdl-mdns-respond.py` and their modules. They are
-fetched by `tools/stage.sh`, not committed: omdrop-awdl is GPL-2.0-only, so
-how they ship is a packaging decision to make deliberately.
+From omdrop-awdl we reuse, unmodified, the tools that only talk to `awdl0` or
+BlueZ: `send-to-peer`, `airdrop-send.py`, `ble-airdrop-adv.py`,
+`awdl-airdrop-adv.py`, `awdl-mdns-respond.py` and the modules they import. They
+are fetched at a pinned commit by `tools/stage.sh`, never committed here.
 
 ## Status
 
-- linux-airdrop's test 70 showed omdrop's receiver, sender, announcer and BLE
-  wake all work over OWL unmodified, in both directions, with this
-  `omdrop-discoverable peers` feeding `send-to-peer`.
-- `omdrop-discoverable peers` works (OWL's peers, from its log at the fixed
-  `/run/omdrop-owl/owl.log`: callers come through pkexec, which drops the
-  environment).
-- `start`, `stop` and `status` are next, ported from linux-airdrop's
-  `lib/awdl.sh`.
-- Then: OWL built and installed root-owned into `/usr/lib/omdrop` (pinned, with
-  linux-airdrop's patches), a polkit policy, and a PKGBUILD.
+- `omdrop-discoverable` implements the whole contract. Checked on the MT7925:
+  `start` returns in under 2 s with `awdl0` usable, announcements going out and
+  the phone listed by `peers`; a second `start` returns 5 and adjusts the
+  window; `stop` tears down in about 2 s; a window expires on its own.
+- omdrop's receiver, sender, announcer and BLE wake all work over it,
+  unmodified, in both directions.
+- Next: a PKGBUILD installing everything root-owned into `/usr/lib/omdrop`,
+  with a polkit policy.
 
-## Known issues to design around
+## Known issues
 
-- The station wedges seconds to minutes after the monitor interface is
-  deleted, until `mt7925e` is reloaded. linux-airdrop's test 15 reproduced it
-  with a bare monitor vif and nothing else, so it's an mt76/firmware bug.
-  omdrop's contract forbids the radio helper from reloading the driver, so
-  `stop` has to tear down in a way that avoids it. Forcing a reconnect right
-  after the delete (test 15's phase N, what `stop` does) and reconnecting
-  around the delete (phase R) both avoided it for 240 s, one run each.
-- Sending is ~490 kB/s, receiving ~1.3 MB/s, limited by OWL's injection path.
+- **Deleting a monitor interface while the station is associated wedges the
+  MT7925.** A bare monitor interface, added and deleted with nothing else
+  running, leaves the station "Connected" but receiving nothing, from seconds
+  to a few minutes later, until `mt7925e` is reloaded. That makes it an
+  mt76/firmware bug. omdrop's contract forbids the radio helper from reloading
+  the driver, so `stop` forces a reconnect right after deleting the interface
+  instead. In testing, that kept the station healthy for the four minutes
+  watched after every teardown.
+- **Sending is slower than receiving** (about 490 kB/s against 1.3 MB/s).
+  Injected frames leave at a fixed pace of about one every 2.5 ms, whatever
+  PHY rate OWL requests (`owl -R`, from `patches/owl-01-tx-rate.patch`) and
+  however many slots the phone offers.
+- **The AP has to be on channel 6, 44 or 149.** Otherwise `start` exits 3 and
+  says so. Taking the card off the AP for the duration of a window would lift
+  this, but isn't implemented.
+- **iPhones randomise their AWDL address**, so nothing here remembers a peer.

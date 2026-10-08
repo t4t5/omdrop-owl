@@ -19,9 +19,8 @@
 #   4  no AWDL radio (no suitable Wi-Fi interface, or awdl0 never came up)
 #   5  already discoverable; the window was extended instead
 #
-# How (linux-airdrop's "shared mode", README there): the station stays
-# associated, and AWDL runs on the AP's own channel, which must be 6, 44 or
-# 149. A monitor vif carries the station's MAC; OWL runs on it with -S
+# How (README, "How it works"): the station stays associated, and AWDL runs
+# on the AP's own channel, which must be 6, 44 or 149. A monitor vif carries the station's MAC; OWL runs on it with -S
 # intersect, so it only advertises the phone's slots on that channel; the
 # station vif ACKs the phone's unicast. OWL creates awdl0, which omdrop's
 # receiver binds to; omdrop-awdl's awdl-airdrop-adv.py announces _airdrop._tcp
@@ -177,11 +176,11 @@ cmd_stop() {
     echo "${pm%% *}" > "$(mt76_dir "$sta")/runtime-pm" 2>/dev/null
     echo "${pm##* }" > "$(mt76_dir "$sta")/deep-sleep" 2>/dev/null
   fi
-  # Deleting the monitor vif has stopped the station receiving 3-90 s later
-  # on the MT7925 (linux-airdrop README, "Gotchas"), and omdrop's contract
-  # forbids reloading the driver here. A fresh association repaired it once,
-  # so force one; whether that's enough is what linux-airdrop's test 15 is
-  # for. $CONF/reconnect-after = 0 turns it off.
+  # On the MT7925, deleting a monitor vif while the station is associated
+  # stops the station receiving, seconds to minutes later (README, "Known
+  # issues"), and omdrop's contract forbids reloading the driver here. A fresh
+  # association right after the delete has kept it healthy in every teardown
+  # tested, so force one. $CONF/reconnect-after = 0 turns it off.
   if [ -n "$sta" ] && [ "$(knob reconnect-after)" != 0 ]; then
     sleep 1
     nmcli -w 20 device connect "$sta" >/dev/null 2>&1 || iw dev "$sta" disconnect 2>/dev/null
