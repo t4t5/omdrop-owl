@@ -2,3 +2,11 @@
 /upstream/
 # The assembled runtime directory.
 /build/
+# makepkg: its git clones (SRCDEST defaults to here), work trees and packages.
+/owl/
+/googletest/
+/radiotap/
+/omdrop-awdl/
+/src/
+/pkg/
+/*.pkg.tar.*

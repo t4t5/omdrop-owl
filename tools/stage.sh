@@ -12,7 +12,8 @@ set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 UPSTREAM_REPO=https://github.com/brentkearney/omdrop-awdl.git
-UPSTREAM_COMMIT=${UPSTREAM_COMMIT:-d0d406b7415c923525cda84a970284445ee53f0b}
+. "$ROOT/pins"
+UPSTREAM_COMMIT=$OMDROP_AWDL_COMMIT
 UP=$ROOT/upstream/omdrop-awdl
 LIB=$ROOT/build/lib
 

@@ -52,8 +52,25 @@ are fetched at a pinned commit by `tools/stage.sh`, never committed here.
   window; `stop` tears down in about 2 s; a window expires on its own.
 - omdrop's receiver, sender, announcer and BLE wake all work over it,
   unmodified, in both directions.
-- Next: a PKGBUILD installing everything root-owned into `/usr/lib/omdrop`,
-  with a polkit policy.
+
+## Install
+
+```sh
+makepkg -si
+```
+
+This builds OWL at the commit pinned in `pins`, with `patches/`, and installs it
+root-owned into `/usr/lib/omdrop` together with `omdrop-discoverable` and
+omdrop-awdl's portable tools, a polkit policy for the helper, and a
+NetworkManager rule keeping `awdl0` and `mon0` unmanaged. It conflicts with
+`brcmfmac-awdl-dkms`: one radio backend at a time.
+
+Then install omdrop itself (a version with radio-backend support) and turn it
+on from the bar. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
+anything, is in the way.
+
+For development without installing, `tools/build-owl.sh` and `tools/stage.sh`
+assemble the same files in `build/lib`.
 
 ## Known issues
 

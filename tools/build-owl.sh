@@ -15,7 +15,7 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DIR=$ROOT/upstream/owl
 OWL_REPO=https://github.com/jedbillyb/owl.git
-OWL_COMMIT=${OWL_COMMIT:-832d70f}
+. "$ROOT/pins"
 
 [ -f /usr/include/ev.h ] || { echo "libev headers missing: sudo pacman -S libev"; exit 1; }
 
@@ -40,4 +40,4 @@ BIN=$DIR/build/daemon/owl
 case "$("$BIN" -S intersect -R 12 -m 02:00:00:00:00:01 -h 2>&1 || true)" in
   *"invalid option"*|*"-R takes"*|*"-m takes"*) echo "$BIN lacks -S, -R or -m; did the patches apply?"; exit 1 ;;
 esac
-echo "built $BIN: owl@$OWL_COMMIT + $(ls "$ROOT"/patches/owl-*.patch | wc -l) patches"
+echo "built $BIN: owl@${OWL_COMMIT:0:7} + $(ls "$ROOT"/patches/owl-*.patch | wc -l) patches"

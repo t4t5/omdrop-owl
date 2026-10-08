@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+
+<!--
+  omdrop runs the radio helper through pkexec. This grants one named action,
+  bound by annotation to the helper at its root-owned path, which an
+  unprivileged user cannot modify.
+
+  allow_active is yes because becoming discoverable from your own seat is an
+  ordinary thing to do, like joining a network, and the helper does that one
+  job. Remote and inactive sessions must authenticate as an administrator:
+  nobody should turn on a machine's discoverability from somewhere else.
+-->
+<policyconfig>
+  <vendor>omdrop-owl</vendor>
+  <vendor_url>https://github.com/t4t5/omdrop-owl</vendor_url>
+
+  <action id="io.github.t4t5.omdrop-owl.discover">
+    <description>Make this computer visible to nearby Apple devices</description>
+    <message>Authentication is required to change AirDrop discoverability</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/omdrop/omdrop-discoverable</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

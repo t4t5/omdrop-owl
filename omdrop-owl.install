@@ -1,0 +1,32 @@
+post_install() {
+  # NetworkManager reads conf.d only at startup or on a reload, so keeping
+  # awdl0 and mon0 unmanaged isn't in force until something rereads it.
+  # `reload conf` touches no connection.
+  if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    nmcli general reload conf >/dev/null 2>&1 \
+      || echo "  Could not reload NetworkManager's configuration. Run: sudo nmcli general reload conf"
+  fi
+  cat <<'MSG'
+  omdrop-owl is omdrop's radio half for MediaTek MT7925 Wi-Fi. Nothing runs
+  until omdrop asks. The interface is the omdrop plugin, in a version that
+  supports radio backends (docs/radio-backend.md):
+
+      omarchy plugin add <omdrop plugin repository>
+      omarchy plugin enable netmojo.omdrop
+
+  Then turn omdrop on from its icon in the bar.
+
+  Your Wi-Fi access point has to be on channel 6, 44 or 149: AirDrop shares
+  its channel. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
+  anything, is in the way.
+MSG
+}
+
+post_upgrade() {
+  post_install
+}
+
+pre_remove() {
+  # Don't leave a window running on a helper that's about to disappear.
+  /usr/lib/omdrop/omdrop-discoverable stop >/dev/null 2>&1 || true
+}
