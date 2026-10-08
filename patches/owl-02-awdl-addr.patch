@@ -1,0 +1,72 @@
+--- a/daemon/io.h
++++ b/daemon/io.h
+@@ -42,6 +42,10 @@
+ 	int host_fd;
+ 	char *dumpfile;
+ 	char wlan_no_monitor_mode;
++	/* owl -m: use this as our AWDL address (and awdl0's MAC) instead of the
++	 * WLAN interface's own, so the monitor vif can keep a MAC of its own. */
++	int addr_override;
++	struct ether_addr override_addr;
+ 	int wlan_is_file;
+ };
+ 
+--- a/daemon/io.c
++++ b/daemon/io.c
+@@ -334,6 +334,10 @@
+ 		log_error("Could not get LLC address from %s", state->wlan_ifname);
+ 		return err;
+ 	}
++	if (state->addr_override) {
++		log_info("AWDL address %s (overrides %s's own)", ether_ntoa(&state->override_addr), state->wlan_ifname);
++		state->if_ether_addr = state->override_addr;
++	}
+ 
+ 	return 0;
+ }
+--- a/daemon/owl.c
++++ b/daemon/owl.c
+@@ -94,6 +94,8 @@
+ 	int no_monitor_mode = 0;
+ 	enum awdl_chanseq_strategy strategy = AWDL_CHANSEQ_VERBATIM;
+ 	int widen_max = 4;
++	struct ether_addr addr_override;
++	int have_addr_override = 0;
+ 
+ 	char wlan[PATH_MAX] = "";
+ 	char host[IFNAMSIZ] = DEFAULT_AWDL_DEVICE;
+@@ -102,8 +104,23 @@
+ 
+ 	struct daemon_state state;
+ 
+-	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:")) != -1) {
++	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:")) != -1) {
+ 		switch (c) {
++			case 'm': {
++				/* Our AWDL address, instead of the monitor interface's MAC. On
++				 * chips that send injected frames from the station's MAC anyway
++				 * (MT7925), this lets the monitor vif keep its own MAC: one
++				 * carrying the station's MAC broke the station when deleted. */
++				struct ether_addr *a = ether_aton(optarg);
++				if (!a) {
++					/* stderr, not log_error: logging isn't set up while parsing options */
++					fprintf(stderr, "-m takes a MAC address, not '%s'\n", optarg);
++					return EXIT_FAILURE;
++				}
++				addr_override = *a;
++				have_addr_override = 1;
++				break;
++			}
+ 			case 'R':
+ 				/* PHY rate for data frames: 6..54 (legacy Mbit/s), mcsN or mcsN-sgi.
+ 				 * Default legacy 12, as before. Action frames stay at 12. */
+@@ -238,6 +255,9 @@
+ 	}
+ 
+ 	state.io.wlan_no_monitor_mode = no_monitor_mode;
++	state.io.addr_override = have_addr_override;
++	if (have_addr_override)
++		state.io.override_addr = addr_override;
+ 
+ 	if (awdl_init(&state, wlan, host, chan, dump ? FAILED_DUMP : 0) < 0) {
+ 		log_error("could not initialize core");

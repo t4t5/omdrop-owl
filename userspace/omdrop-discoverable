@@ -3,33 +3,107 @@
 # Apple's Broadcom firmware (first target: MediaTek MT7925), where AWDL runs in
 # userspace through OWL on a monitor interface.
 #
-# Same contract as omdrop-awdl's helper, which the omdrop CLI and send-to-peer
-# call against:
-#   omdrop-discoverable start <seconds>    become discoverable for N seconds
+#   omdrop-discoverable start <seconds>    become discoverable for N seconds (0: until stopped)
 #   omdrop-discoverable stop               stop advertising, tear down
-#   omdrop-discoverable status [--json]    {"visible":bool,"remaining":int|null,"reason":str,...}
-#   omdrop-discoverable peers              "<mac> rssi=<n>" per AWDL peer
-# Exit codes: 0 ok, 2 usage or not root, 3 data path parked, 4 awdl0 absent,
-# 5 already discoverable.
+#   omdrop-discoverable status [--json]    {"visible":bool,"remaining":int|null,"reason":str,"rx_proven":bool,"peer_op":str}
+#   omdrop-discoverable peers              "<mac> rssi=?" per AWDL peer
 #
-# Only `peers` exists so far: start, stop and status come next, ported from
-# linux-airdrop's lib/awdl.sh once the spike there has shown omdrop's receiver
-# and sender work over OWL.
+# The same contract as omdrop-awdl's helper, which the omdrop CLI and
+# send-to-peer call against. Exit codes:
+#   0  visible (start), stopped (stop), always (status, peers)
+#   2  usage error, or not root
+#   3  can't become discoverable now (Wi-Fi not connected, or its AP isn't on
+#      an AWDL channel); retryable
+#   4  no AWDL radio (no suitable Wi-Fi interface, or awdl0 never came up)
+#   5  already discoverable; the window was extended instead
+#
+# How (linux-airdrop's "shared mode", README there): the station stays
+# associated, and AWDL runs on the AP's own channel, which must be 6, 44 or
+# 149. A monitor vif carries the station's MAC; OWL runs on it with -S
+# intersect, so it only advertises the phone's slots on that channel; the
+# station vif ACKs the phone's unicast. OWL creates awdl0, which omdrop's
+# receiver binds to; omdrop-awdl's awdl-airdrop-adv.py announces _airdrop._tcp
+# on it (--plain: OWL adds the AWDL encapsulation itself).
+#
+# ROOT: required. Callers come through pkexec, which drops the environment, so
+# everything lives at fixed paths: helpers beside this script (/usr/lib/omdrop
+# when packaged), state in $RUN, tunables in $CONF.
 set -uo pipefail
 
-# Fixed paths: callers reach us through pkexec, which drops the environment, so
-# an override variable set by the caller never arrives. These are for running
-# the helper by hand.
-RUN=${OMDROP_OWL_RUN:-/run/omdrop-owl}
-OWL_LOG=${OMDROP_OWL_LOG:-$RUN/owl.log}
+SELF=$(readlink -f "$0")
+LIB=$(dirname "$SELF")
+RUN=/run/omdrop-owl
+CONF=${OMDROP_CONF:-/etc/omdrop}
+OWL_LOG=$RUN/owl.log
+IF=awdl0
+MON=mon0
+OWL_BIN=$LIB/owl
+# Receiver capability flags in the announcement, as omdrop-awdl sends them:
+# 0x88 (OpenDrop's: SUPPORTS_MIXED_TYPES | SUPPORTS_DISCOVER_MAYBE) + SUPPORTS_URL.
+ADV_FLAGS=137
+ADV_INTERVAL=3
 
-die() { echo "omdrop-discoverable: $1" >&2; exit "${2:-2}"; }
+# status and peers run without root, so logging must fail quietly.
+log() { { mkdir -p "$RUN" && printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$*" >> "$RUN/log"; } 2>/dev/null || true; }
+die() { log "error: $1"; echo "omdrop-discoverable: $1" >&2; exit "${2:-2}"; }
+knob() { head -1 "$CONF/$1" 2>/dev/null | tr -d '[:space:]' || true; }
+alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
+pid_of() { cat "$RUN/$1.pid" 2>/dev/null; }
+need_root() { [ "$(id -u)" = 0 ] || die "must run as root (through pkexec)" 2; }
+
+# The Wi-Fi station: $CONF/infra-iface, else the first managed interface whose
+# driver can do this (mt76 family first, any mac80211 card as a fallback).
+station_iface() {
+  local forced d name
+  forced=$(knob infra-iface)
+  [ -n "$forced" ] && { echo "$forced"; return; }
+  for d in /sys/class/net/*/phy80211; do
+    name=$(basename "$(dirname "$d")")
+    [ "$name" = "$IF" ] || [ "$name" = "$MON" ] && continue
+    iw dev "$name" info 2>/dev/null | grep -q 'type managed' || continue
+    echo "$name"
+    return
+  done
+}
+
+mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/class/net/$1/phy80211")")/mt76"; }
+
+# --------------------------------------------------------------------- status
+
+visible() {
+  alive "$(pid_of supervisor)" && alive "$(pid_of owl)" \
+    && ip -6 addr show dev "$IF" scope link 2>/dev/null | grep -q inet6 \
+    && ! ip -6 addr show dev "$IF" scope link | grep -q tentative
+}
+
+cmd_status() {
+  local vis=false remaining=null reason until rx=false now
+  reason=$(cat "$RUN/reason" 2>/dev/null)
+  if visible; then
+    vis=true
+    until=$(cat "$RUN/until" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    [ "${until:-0}" -gt 0 ] && remaining=$(( until > now ? until - now : 0 ))
+  fi
+  # OWL synced with at least one peer in this window: receive proven, not just
+  # transmit. The log outlives a window, so only while one is up.
+  [ "$vis" = true ] && grep -q 'add peer' "$OWL_LOG" 2>/dev/null && rx=true
+  if [ "${1:-}" = --json ]; then
+    printf '{"visible":%s,"remaining":%s,"reason":"%s","rx_proven":%s,"peer_op":""}\n' \
+      "$vis" "$remaining" "${reason//\"/}" "$rx"
+  else
+    printf 'visible=%s remaining=%s reason=%s rx_proven=%s\n' "$vis" "$remaining" "${reason:-}" "$rx"
+  fi
+}
+
+# ---------------------------------------------------------------------- peers
 
 # OWL logs "add peer <mac> (<name>)" and "remove peer <mac> (<name>)" at INFO,
 # with ether_ntoa's unpadded octets (86:8:4:8a:2b:f4), and adds each peer as a
 # permanent IPv6 neighbour on awdl0, which send-to-peer merges in as well. The
 # signal strength is only in OWL's TRACE output, so it is reported as unknown;
-# send-to-peer and the omdrop CLI both list such peers as "? dBm".
+# send-to-peer and the omdrop CLI both list such peers as "? dBm". iPhones
+# randomise their AWDL address, so nothing here remembers one.
 cmd_peers() {
   [ -r "$OWL_LOG" ] || die "no OWL log at $OWL_LOG; is the radio up?" 4
   grep -oE '(add|remove) peer [0-9a-f:]+' "$OWL_LOG" | awk '
@@ -40,8 +114,148 @@ cmd_peers() {
     END { for (m in seen) print m " rssi=?" }'
 }
 
+# ----------------------------------------------------------------------- stop
+
+cmd_stop() {
+  local why=${1:-stopped} sup sta pm
+  need_root
+  exec 9> "$RUN/lock" 2>/dev/null || { mkdir -p "$RUN"; exec 9> "$RUN/lock"; }
+  flock 9
+  sup=$(pid_of supervisor)
+  # The supervisor calls `stop expired` itself; don't kill the caller.
+  [ -n "$sup" ] && [ "$sup" != "$$" ] && [ "$sup" != "${PPID:-}" ] && kill "$sup" 2>/dev/null
+  pkill -f -- "$LIB/awdl-airdrop-adv.py" 2>/dev/null
+  alive "$(pid_of owl)" && kill "$(pid_of owl)" 2>/dev/null
+  pkill -f "^$OWL_BIN " 2>/dev/null
+  ip link set "$MON" down 2>/dev/null
+  iw dev "$MON" del 2>/dev/null
+  sta=$(cat "$RUN/station" 2>/dev/null)
+  pm=$(cat "$RUN/pm" 2>/dev/null)
+  if [ -n "$sta" ] && [ -n "$pm" ]; then
+    echo "${pm%% *}" > "$(mt76_dir "$sta")/runtime-pm" 2>/dev/null
+    echo "${pm##* }" > "$(mt76_dir "$sta")/deep-sleep" 2>/dev/null
+  fi
+  # Deleting the monitor vif has stopped the station receiving 3-90 s later
+  # on the MT7925 (linux-airdrop README, "Gotchas"), and omdrop's contract
+  # forbids reloading the driver here. A fresh association repaired it once,
+  # so force one; whether that's enough is what linux-airdrop's test 15 is
+  # for. $CONF/reconnect-after = 0 turns it off.
+  if [ -n "$sta" ] && [ "$(knob reconnect-after)" != 0 ]; then
+    sleep 1
+    nmcli -w 20 device connect "$sta" >/dev/null 2>&1 || iw dev "$sta" disconnect 2>/dev/null
+  fi
+  rm -f "$RUN/supervisor.pid" "$RUN/owl.pid" "$RUN/until"
+  printf '%s' "$why" > "$RUN/reason"
+  log "stopped ($why)"
+  return 0
+}
+
+# ---------------------------------------------------------------------- start
+
+# The background half of a window: announce, watch OWL, end at expiry.
+supervise() {
+  local until
+  while true; do
+    until=$(cat "$RUN/until" 2>/dev/null || echo 0)
+    if [ "${until:-0}" -gt 0 ] && [ "$(date +%s)" -ge "$until" ]; then
+      log "window expired"
+      exec "$SELF" stop expired
+    fi
+    if ! alive "$(pid_of owl)"; then
+      log "OWL exited: $(tail -1 "$OWL_LOG" 2>/dev/null)"
+      exec "$SELF" stop owl-exited
+    fi
+    python3 "$LIB/awdl-airdrop-adv.py" --iface "$IF" --plain --flags "$ADV_FLAGS" --port 8771 \
+      --count 3 --interval 0.05 >> "$RUN/announce.log" 2>&1
+    sleep "$ADV_INTERVAL"
+  done
+}
+
+cmd_start() {
+  local secs=${1:-} sta gw ap chan stamac mt76 _
+  [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: omdrop-discoverable start <seconds>" 2
+  need_root
+  mkdir -p "$RUN"
+  exec 9> "$RUN/lock"
+  flock 9
+  [ -x "$OWL_BIN" ] || die "OWL is not installed at $OWL_BIN" 4
+
+  if alive "$(pid_of supervisor)"; then
+    if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
+    log "already discoverable; window now ${secs}s"
+    exit 5
+  fi
+  : > "$RUN/log"
+  : > "$RUN/announce.log"
+  rm -f "$RUN/reason"
+
+  sta=$(station_iface)
+  [ -n "$sta" ] || die "no Wi-Fi interface to run AWDL on" 4
+  # Wi-Fi takes a few seconds after a driver reload to associate and get an
+  # address; don't judge a link that's still coming up.
+  for _ in $(seq 15); do
+    gw=$(ip -4 route show default dev "$sta" 2>/dev/null | awk '{print $3; exit}')
+    [ -n "$gw" ] && ping -c1 -W1 -I "$sta" "$gw" >/dev/null 2>&1 && break
+    gw=""
+    sleep 1
+  done
+  [ -n "$gw" ] || die "Wi-Fi isn't connected (or isn't passing traffic), and AirDrop shares its channel. Connect to Wi-Fi and try again." 3
+  ap=$(iw dev "$sta" link | awk '/freq:/ {print int($2)}')
+  case "$ap" in
+    2437) chan=6 ;; 5220) chan=44 ;; 5745) chan=149 ;;
+    *) die "your Wi-Fi network is on ${ap:-an unknown} MHz, but AirDrop can only share channel 6, 44 or 149 with it. Moving the router to one of those makes this work." 3 ;;
+  esac
+  stamac=$(cat "/sys/class/net/$sta/address")
+  echo "$sta" > "$RUN/station"
+  log "station $sta ($stamac) on ch$chan, gateway $gw"
+
+  iw dev "$MON" del 2>/dev/null
+  iw phy "$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")" interface add "$MON" type monitor \
+    || die "could not create the monitor interface $MON" 4
+  ip link set "$MON" address "$stamac"
+  ip link set "$MON" up || die "could not bring $MON up" 4
+
+  # Runtime PM off for the window, as in every session that worked; restored by stop.
+  mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+  mt76=$(mt76_dir "$sta")
+  if [ -w "$mt76/runtime-pm" ]; then
+    echo "$(cat "$mt76/runtime-pm") $(cat "$mt76/deep-sleep")" > "$RUN/pm"
+    echo 0 > "$mt76/runtime-pm"
+    echo 0 > "$mt76/deep-sleep"
+  fi
+
+  if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
+  # 9>&-: children must not inherit the lock, or the long-lived ones would hold
+  # it for the whole window and the next `stop` would wait forever.
+  setsid "$OWL_BIN" -i "$MON" -c "$chan" -N -S intersect -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
+  echo $! > "$RUN/owl.pid"
+  for _ in $(seq 20); do ip link show "$IF" >/dev/null 2>&1 && break; sleep 0.5; done
+  if ! ip link show "$IF" >/dev/null 2>&1; then
+    local why; why=$(tail -1 "$OWL_LOG" 2>/dev/null)
+    cmd_stop owl-failed >/dev/null
+    die "AWDL didn't come up: ${why:-OWL exited}" 4
+  fi
+  nmcli device set "$IF" managed no >/dev/null 2>&1
+  ip link set "$IF" up
+  # awdl0's link-local stays "tentative" during duplicate address detection,
+  # and omdrop's receiver refuses to start without a usable one.
+  for _ in $(seq 20); do
+    ip -6 addr show dev "$IF" scope link | grep -q inet6 \
+      && ! ip -6 addr show dev "$IF" scope link | grep -q tentative && break
+    sleep 0.5
+  done
+
+  setsid "$SELF" __supervise > /dev/null 2>&1 < /dev/null 9>&- &
+  echo $! > "$RUN/supervisor.pid"
+  log "discoverable for ${secs}s (0 = until stopped)"
+  return 0
+}
+
 case "${1:-}" in
-  peers) cmd_peers ;;
-  start|stop|status) die "$1 is not implemented yet (spike stage); bring the radio up with linux-airdrop's lib/awdl.sh" 2 ;;
+  start)  shift; cmd_start "$@" ;;
+  stop)   cmd_stop "${2:-stopped}" ;;
+  status) shift; cmd_status "$@" ;;
+  peers)  cmd_peers ;;
+  __supervise) supervise ;;
   *) die "usage: omdrop-discoverable start <seconds> | stop | status [--json] | peers" 2 ;;
 esac

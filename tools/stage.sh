@@ -30,18 +30,25 @@ FROM_UPSTREAM=(
   awdl-mdns-respond.py  # answers mDNS queries for our identity on awdl0
 )
 
+OWL_BIN=$ROOT/upstream/owl/build/daemon/owl
+[ -x "$OWL_BIN" ] || { echo "no OWL build at $OWL_BIN; run tools/build-owl.sh first"; exit 1; }
+
 if [ ! -d "$UP/.git" ]; then
   git clone -q "$UPSTREAM_REPO" "$UP"
 fi
 git -C "$UP" fetch -q origin || true
 git -C "$UP" -c advice.detachedHead=false checkout -q "$UPSTREAM_COMMIT"
 
-rm -rf "$LIB"
+# Replace files rather than the directory: running these tools as root (as
+# pkexec does) leaves a root-owned __pycache__ here, which a user can't delete
+# and Python revalidates against the sources anyway.
 mkdir -p "$LIB"
+find "$LIB" -maxdepth 1 -type f -delete
 for f in "${FROM_UPSTREAM[@]}"; do
   cp "$UP/userspace/$f" "$LIB/$f"
 done
 cp "$ROOT"/userspace/* "$LIB/"
-chmod 755 "$LIB/send-to-peer" "$LIB/omdrop-discoverable" "$LIB"/*.py
+cp "$OWL_BIN" "$LIB/owl"
+chmod 755 "$LIB/send-to-peer" "$LIB/omdrop-discoverable" "$LIB/owl" "$LIB"/*.py
 
-echo "staged $LIB: ${#FROM_UPSTREAM[@]} files from omdrop-awdl@${UPSTREAM_COMMIT:0:7}, $(ls "$ROOT/userspace" | wc -l) of ours"
+echo "staged $LIB: ${#FROM_UPSTREAM[@]} files from omdrop-awdl@${UPSTREAM_COMMIT:0:7}, $(ls "$ROOT/userspace" | wc -l) of ours, and owl"

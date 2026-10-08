@@ -1,0 +1,189 @@
+diff --git i/daemon/owl.c w/daemon/owl.c
+index 349c6a6..a981439 100644
+--- i/daemon/owl.c
++++ w/daemon/owl.c
+@@ -27,6 +27,7 @@
+ 
+ #include "log.h"
+ #include "core.h"
++#include "tx.h"
+ 
+ #define DEFAULT_AWDL_DEVICE "awdl0"
+ #define FAILED_DUMP "failed.pcap"
+@@ -101,8 +102,18 @@ int main(int argc, char *argv[]) {
+ 
+ 	struct daemon_state state;
+ 
+-	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:")) != -1) {
++	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:")) != -1) {
+ 		switch (c) {
++			case 'R':
++				/* PHY rate for data frames: 6..54 (legacy Mbit/s), mcsN or mcsN-sgi.
++				 * Default legacy 12, as before. Action frames stay at 12. */
++				if (ieee80211_parse_tx_rate(optarg, &awdl_data_tx_rate) < 0) {
++					/* stderr, not log_error: logging isn't set up while parsing options */
++					fprintf(stderr, "-R takes a legacy rate (6, 9, 12, 18, 24, 36, 48, 54), "
++					        "mcs0..mcs15 or mcsN-sgi, not '%s'\n", optarg);
++					return EXIT_FAILURE;
++				}
++				break;
+ 			case 'S':
+ 				/* How to derive our channel sequence from a peer's. Exposed so a
+ 				 * single test session can A/B all three against the same phone --
+@@ -242,6 +253,11 @@ int main(int argc, char *argv[]) {
+ 	         strategy == AWDL_CHANSEQ_INTERSECT ? "intersect" : "verbatim");
+ 	if (strategy == AWDL_CHANSEQ_WIDEN)
+ 		log_info("widening by at most %d slot(s)", widen_max);
++	{
++		char rate[64];
++		ieee80211_format_tx_rate(rate, sizeof(rate), &awdl_data_tx_rate);
++		log_info("data frame TX rate: %s", rate);
++	}
+ 
+ 	if (state.io.wlan_ifindex)
+ 		log_info("WLAN device: %s (addr %s)", state.io.wlan_ifname, ether_ntoa(&state.io.if_ether_addr));
+diff --git i/src/tx.c w/src/tx.c
+index d72d7ff..3abdc59 100644
+--- i/src/tx.c
++++ w/src/tx.c
+@@ -18,6 +18,8 @@
+  */
+ 
+ #include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ #include <radiotap.h>
+@@ -294,10 +296,60 @@ int awdl_init_version_tlv(uint8_t *buf, const struct awdl_state *state) {
+ 	return sizeof(struct awdl_version_tlv);
+ }
+ 
++struct ieee80211_tx_rate awdl_data_tx_rate = { .legacy = 12, .mcs = -1, .sgi = 0 };
++
++static const struct ieee80211_tx_rate legacy_12 = { .legacy = 12, .mcs = -1, .sgi = 0 };
++
++/* "12" (legacy Mbit/s), "mcs7" (HT MCS, 20 MHz) or "mcs7-sgi". */
++int ieee80211_parse_tx_rate(const char *s, struct ieee80211_tx_rate *rate) {
++	static const int legacy_ok[] = { 6, 9, 12, 18, 24, 36, 48, 54 };
++	char *end;
++	long v;
++
++	rate->sgi = 0;
++	if (!strncmp(s, "mcs", 3)) {
++		v = strtol(s + 3, &end, 10);
++		if (end == s + 3 || v < 0 || v > 15)
++			return -1;
++		if (!strcmp(end, "-sgi"))
++			rate->sgi = 1;
++		else if (*end)
++			return -1;
++		rate->mcs = (int) v;
++		rate->legacy = 0;
++		return 0;
++	}
++	v = strtol(s, &end, 10);
++	if (end == s || *end)
++		return -1;
++	for (size_t i = 0; i < sizeof(legacy_ok) / sizeof(legacy_ok[0]); i++) {
++		if (v == legacy_ok[i]) {
++			rate->legacy = (int) v;
++			rate->mcs = -1;
++			return 0;
++		}
++	}
++	return -1;
++}
++
++int ieee80211_format_tx_rate(char *buf, size_t len, const struct ieee80211_tx_rate *rate) {
++	if (rate->mcs < 0)
++		return snprintf(buf, len, "legacy %d Mbit/s", rate->legacy);
++	return snprintf(buf, len, "HT MCS %d, 20 MHz%s", rate->mcs, rate->sgi ? ", short GI" : "");
++}
++
+ int ieee80211_init_radiotap_header(uint8_t *buf) {
++	return ieee80211_init_radiotap_header_rate(buf, &legacy_12);
++}
++
++int ieee80211_init_radiotap_header_rate(uint8_t *buf, const struct ieee80211_tx_rate *rate) {
+ 	/*
+ 	 * TX radiotap headers and mac80211
+ 	 * https://www.kernel.org/doc/Documentation/networking/mac80211-injection.txt
++	 *
++	 * mac80211 turns a RATE or MCS field into a fixed rate for the frame
++	 * (IEEE80211_TX_CTRL_RATE_INJECT). Whether the driver and firmware then
++	 * use it is up to them; only throughput tells.
+ 	 */
+ 	struct ieee80211_radiotap_header *hdr = (struct ieee80211_radiotap_header *) buf;
+ 	uint8_t *ptr = buf + sizeof(struct ieee80211_radiotap_header);
+@@ -306,11 +358,16 @@ int ieee80211_init_radiotap_header(uint8_t *buf) {
+ 	hdr->it_version = 0;
+ 	hdr->it_pad = 0;
+ 
+-	/* TODO Adjust PHY parameters based on receiver capabilities */
+-
+-	present |= ieee80211_radiotap_type_to_mask(IEEE80211_RADIOTAP_RATE);
+-	*ptr = htole16(ieee80211_radiotap_rate_to_val(12));
+-	ptr += sizeof(uint8_t);
++	if (rate->mcs < 0) {
++		present |= ieee80211_radiotap_type_to_mask(IEEE80211_RADIOTAP_RATE);
++		*ptr++ = (uint8_t) ieee80211_radiotap_rate_to_val(rate->legacy);
++	} else {
++		/* known, flags, mcs; byte-aligned, so no padding needed after RATE-less header */
++		present |= ieee80211_radiotap_type_to_mask(IEEE80211_RADIOTAP_MCS);
++		*ptr++ = IEEE80211_RADIOTAP_MCS_HAVE_BW | IEEE80211_RADIOTAP_MCS_HAVE_MCS | IEEE80211_RADIOTAP_MCS_HAVE_GI;
++		*ptr++ = IEEE80211_RADIOTAP_MCS_BW_20 | (rate->sgi ? IEEE80211_RADIOTAP_MCS_SGI : 0);
++		*ptr++ = (uint8_t) rate->mcs;
++	}
+ 
+ 	hdr->it_len = htole16((uint16_t) (ptr - buf));
+ 	hdr->it_present = htole32(present);
+@@ -389,7 +446,7 @@ int awdl_init_full_data_frame(uint8_t *buf, const struct ether_addr *src, const
+                               struct awdl_state *state, struct ieee80211_state *ieee80211_state) {
+ 	uint8_t *ptr = buf;
+ 
+-	ptr += ieee80211_init_radiotap_header(ptr);
++	ptr += ieee80211_init_radiotap_header_rate(ptr, &awdl_data_tx_rate);
+ 	ptr += ieee80211_init_awdl_data_hdr(ptr, src, dst, ieee80211_state);
+ 	ptr += llc_init_awdl_hdr(ptr);
+ 	ptr += awdl_init_data(ptr, state);
+diff --git i/src/tx.h w/src/tx.h
+index 9af9daa..33b1e0c 100644
+--- i/src/tx.h
++++ w/src/tx.h
+@@ -20,6 +20,8 @@
+ #ifndef AWDL_TX_H_
+ #define AWDL_TX_H_
+ 
++#include <stddef.h>
++
+ #include "frame.h"
+ #include "version.h"
+ #include "state.h"
+@@ -59,8 +61,26 @@ int awdl_init_full_data_frame(uint8_t *buf, const struct ether_addr *src, const
+                               const uint8_t *payload, unsigned int plen,
+                               struct awdl_state *, struct ieee80211_state *);
+ 
++/* The PHY rate a frame is injected at: legacy (Mbit/s) when mcs < 0,
++ * otherwise an HT MCS index at 20 MHz. */
++struct ieee80211_tx_rate {
++	int legacy;
++	int mcs;
++	int sgi;
++};
++
++/* Data frames are injected at this rate; see owl -R. Action frames always use
++ * legacy 12 Mbit/s, as iPhones do for theirs. */
++extern struct ieee80211_tx_rate awdl_data_tx_rate;
++
++int ieee80211_parse_tx_rate(const char *s, struct ieee80211_tx_rate *rate);
++
++int ieee80211_format_tx_rate(char *buf, size_t len, const struct ieee80211_tx_rate *rate);
++
+ int ieee80211_init_radiotap_header(uint8_t *buf);
+ 
++int ieee80211_init_radiotap_header_rate(uint8_t *buf, const struct ieee80211_tx_rate *rate);
++
+ int ieee80211_init_awdl_hdr(uint8_t *buf, const struct ether_addr *src, const struct ether_addr *dst,
+                             struct ieee80211_state *, uint16_t type);
+ 

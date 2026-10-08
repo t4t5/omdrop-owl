@@ -42,8 +42,10 @@ how they ship is a packaging decision to make deliberately.
 
 ## Known issues to design around
 
-- The station wedges 3–90 s after the monitor interface is deleted (until
-  `mt7925e` is reloaded). omdrop's contract forbids the radio helper from
-  reloading the driver, so the window lifecycle has to avoid or repair this
-  differently.
+- The station wedges seconds to minutes after the monitor interface is
+  deleted, until `mt7925e` is reloaded. linux-airdrop's test 15 reproduced it
+  with a bare monitor vif and nothing else, so it's an mt76/firmware bug.
+  omdrop's contract forbids the radio helper from reloading the driver, so
+  `stop` has to tear down in a way that avoids it; test 15's phases N and R
+  compare candidates. `stop` currently forces a reconnect (N).
 - Sending is ~490 kB/s, receiving ~1.3 MB/s, limited by OWL's injection path.
