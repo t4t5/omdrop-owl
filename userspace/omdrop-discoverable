@@ -39,6 +39,7 @@ OWL_LOG=$RUN/owl.log
 IF=awdl0
 MON=mon0
 OWL_BIN=$LIB/owl
+PROFILES=$LIB/owl-profiles
 # Receiver capability flags in the announcement, as omdrop-awdl sends them:
 # 0x88 (OpenDrop's: SUPPORTS_MIXED_TYPES | SUPPORTS_DISCOVER_MAYBE) + SUPPORTS_URL.
 ADV_FLAGS=137
@@ -47,10 +48,6 @@ VERSION=0.1.0
 # The omdrop-awdl helper contract this follows, which is also the version of
 # omdrop-awdl's tools staged beside it.
 CONTRACT=0.8.1
-# Wi-Fi drivers this has been tested on. Other mac80211 cards that can inject
-# from a monitor interface while associated may work too: $CONF/allow-untested
-# containing 1 lets them through.
-TESTED_DRIVERS="mt7925e"
 
 # status and peers run without root, so logging must fail quietly.
 log() { { mkdir -p "$RUN" && printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$*" >> "$RUN/log"; } 2>/dev/null || true; }
@@ -67,8 +64,7 @@ alive() {  # PID [PATTERN]
 pid_of() { cat "$RUN/$1.pid" 2>/dev/null; }
 need_root() { [ "$(id -u)" = 0 ] || die "must run as root (through pkexec)" 2; }
 
-# The Wi-Fi station: $CONF/infra-iface, else the first managed interface whose
-# driver can do this (mt76 family first, any mac80211 card as a fallback).
+# The Wi-Fi station: $CONF/infra-iface, else the first managed interface.
 station_iface() {
   local forced d name
   forced=$(knob infra-iface)
@@ -80,6 +76,27 @@ station_iface() {
     echo "$name"
     return
   done
+}
+
+driver_of() { basename "$(readlink -f "/sys/class/net/$1/device/driver")" 2>/dev/null; }
+
+# This driver's line in owl-profiles, else the "*" line: sets PROF_STATUS,
+# PROF_MODE, PROF_MONMAC, PROF_RECONNECT and PROF_PM (see owl-profiles).
+# $CONF/owl-profiles, when present, is read first: it's where to try settings
+# for a new card without editing the packaged table.
+load_profile() {  # DRIVER
+  local line _ tables=()
+  [ -r "$CONF/owl-profiles" ] && tables+=("$CONF/owl-profiles")
+  [ -r "$PROFILES" ] && tables+=("$PROFILES")
+  [ ${#tables[@]} -gt 0 ] || return 1
+  line=$(awk -v d="$1" '!/^#/ && NF >= 6 && $1 == d {print; exit}' "${tables[@]}")
+  [ -n "$line" ] || line=$(awk '!/^#/ && NF >= 6 && $1 == "*" {print; exit}' "${tables[@]}")
+  [ -n "$line" ] || return 1
+  read -r _ PROF_STATUS PROF_MODE PROF_MONMAC PROF_RECONNECT PROF_PM _ <<< "$line"
+}
+
+untested_hint() {
+  echo "omdrop-owl hasn't been tested on this computer's Wi-Fi (${1:-unknown driver}). To try it anyway, put 1 in $CONF/allow-untested, and please report how it goes (README, \"Adding your card\")."
 }
 
 mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/class/net/$1/phy80211")")/mt76"; }
@@ -137,15 +154,19 @@ cmd_peers() {
 cmd_probe() {
   local sta drv hw=true ap missing=()
   sta=$(station_iface)
-  drv=$( [ -n "$sta" ] && basename "$(readlink -f "/sys/class/net/$sta/device/driver")" 2>/dev/null )
+  drv=$( [ -n "$sta" ] && driver_of "$sta" )
   if [ -z "$sta" ]; then
     hw=false
     missing+=("hardware|This computer has no Wi-Fi interface that omdrop-owl can use.")
-  elif [[ " $TESTED_DRIVERS " != *" $drv "* ]] && [ "$(knob allow-untested)" != 1 ]; then
+  elif ! load_profile "$drv"; then
     hw=false
-    missing+=("hardware|omdrop-owl has only been tested on MediaTek MT7925 Wi-Fi, and this computer's is ${drv:-unknown}. To try it anyway, put 1 in $CONF/allow-untested.")
+    missing+=("backend|omdrop-owl is installed without its hardware profiles ($PROFILES). Reinstall omdrop-owl.")
+  elif [ "$PROF_STATUS" != tested ] && [ "$(knob allow-untested)" != 1 ]; then
+    hw=false
+    missing+=("hardware|$(untested_hint "$drv")")
   else
     [ -x "$OWL_BIN" ] || missing+=("backend|omdrop-owl is installed without OWL ($OWL_BIN). Reinstall omdrop-owl.")
+    [ "$PROF_MODE" = shared ] || missing+=("backend|This Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet.")
     ap=$(iw dev "$sta" link 2>/dev/null | awk '/freq:/ {print int($2)}')
     case "$ap" in
       2437|5220|5745) ;;
@@ -165,7 +186,7 @@ print(json.dumps({"backend": "owl", "version": os.environ["V"], "contract": os.e
 # ----------------------------------------------------------------------- stop
 
 cmd_stop() {
-  local why=${1:-stopped} sup sta pm
+  local why=${1:-stopped} sup sta pm reconnect
   need_root
   exec 9> "$RUN/lock" 2>/dev/null || { mkdir -p "$RUN"; exec 9> "$RUN/lock"; }
   flock 9
@@ -183,12 +204,18 @@ cmd_stop() {
     echo "${pm%% *}" > "$(mt76_dir "$sta")/runtime-pm" 2>/dev/null
     echo "${pm##* }" > "$(mt76_dir "$sta")/deep-sleep" 2>/dev/null
   fi
-  # On the MT7925, deleting a monitor vif while the station is associated
-  # stops the station receiving, seconds to minutes later (README, "Known
-  # issues"), and omdrop's contract forbids reloading the driver here. A fresh
-  # association right after the delete has kept it healthy in every teardown
-  # tested, so force one. $CONF/reconnect-after = 0 turns it off.
-  if [ -n "$sta" ] && [ "$(knob reconnect-after)" != 0 ]; then
+  # Some drivers' stations stop receiving after a monitor vif is deleted (the
+  # MT7925: README, "Known issues"), and omdrop's contract forbids reloading
+  # the driver here. A fresh association right after the delete has kept it
+  # healthy in every teardown tested, so force one where the profile says so.
+  # $CONF/reconnect-after (0 or 1) overrides the profile.
+  reconnect=$(knob reconnect-after)
+  case "$reconnect" in
+    0) reconnect=no ;;
+    1) reconnect=yes ;;
+    *) reconnect=$(awk '{print $4}' "$RUN/profile" 2>/dev/null) ;;
+  esac
+  if [ -n "$sta" ] && [ "$reconnect" = yes ]; then
     sleep 1
     nmcli -w 20 device connect "$sta" >/dev/null 2>&1 || iw dev "$sta" disconnect 2>/dev/null
   fi
@@ -220,7 +247,8 @@ supervise() {
 }
 
 cmd_start() {
-  local secs=${1:-} sta gw ap chan stamac mt76 _
+  local secs=${1:-} sta drv gw ap chan stamac monmac mt76 _
+  local owl_extra=()
   [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: omdrop-discoverable start <seconds>" 2
   need_root
   mkdir -p "$RUN"
@@ -239,6 +267,12 @@ cmd_start() {
 
   sta=$(station_iface)
   [ -n "$sta" ] || die "no Wi-Fi interface to run AWDL on" 4
+  drv=$(driver_of "$sta")
+  load_profile "$drv" || die "no hardware profile at $PROFILES; reinstall omdrop-owl" 4
+  if [ "$PROF_STATUS" != tested ] && [ "$(knob allow-untested)" != 1 ]; then
+    die "$(untested_hint "$drv")" 4
+  fi
+  [ "$PROF_MODE" = shared ] || die "this Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet" 4
   # Wi-Fi takes a few seconds after a driver reload to associate and get an
   # address; don't judge a link that's still coming up.
   for _ in $(seq 15); do
@@ -255,18 +289,28 @@ cmd_start() {
   esac
   stamac=$(cat "/sys/class/net/$sta/address")
   echo "$sta" > "$RUN/station"
-  log "station $sta ($stamac) on ch$chan, gateway $gw"
+  echo "$drv $PROF_MODE $PROF_MONMAC $PROF_RECONNECT $PROF_PM" > "$RUN/profile"
+  log "station $sta ($stamac, $drv) on ch$chan, gateway $gw; profile: mode=$PROF_MODE mon_mac=$PROF_MONMAC reconnect=$PROF_RECONNECT mt76_pm=$PROF_PM"
 
   iw dev "$MON" del 2>/dev/null
   iw phy "$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")" interface add "$MON" type monitor \
     || die "could not create the monitor interface $MON" 4
-  ip link set "$MON" address "$stamac"
+  # mon_mac: the station's MAC on the monitor interface, or one of its own
+  # (locally administered, derived from the station's) with OWL told the
+  # station's through -m.
+  if [ "$PROF_MONMAC" = own ]; then
+    monmac="02:${stamac#*:}"
+    owl_extra=(-m "$stamac")
+  else
+    monmac=$stamac
+  fi
+  ip link set "$MON" address "$monmac"
   ip link set "$MON" up || die "could not bring $MON up" 4
 
-  # Runtime PM off for the window, as in every session that worked; restored by stop.
+  # mt76_pm: runtime PM off for the window, restored by stop.
   mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
   mt76=$(mt76_dir "$sta")
-  if [ -w "$mt76/runtime-pm" ]; then
+  if [ "$PROF_PM" = yes ] && [ -w "$mt76/runtime-pm" ]; then
     echo "$(cat "$mt76/runtime-pm") $(cat "$mt76/deep-sleep")" > "$RUN/pm"
     echo 0 > "$mt76/runtime-pm"
     echo 0 > "$mt76/deep-sleep"
@@ -275,7 +319,7 @@ cmd_start() {
   if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
   # 9>&-: children must not inherit the lock, or the long-lived ones would hold
   # it for the whole window and the next `stop` would wait forever.
-  setsid "$OWL_BIN" -i "$MON" -c "$chan" -N -S intersect -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
+  setsid "$OWL_BIN" -i "$MON" -c "$chan" -N -S intersect "${owl_extra[@]}" -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
   echo $! > "$RUN/owl.pid"
   for _ in $(seq 20); do ip link show "$IF" >/dev/null 2>&1 && break; sleep 0.5; done
   if ! ip link show "$IF" >/dev/null 2>&1; then

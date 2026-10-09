@@ -32,6 +32,7 @@ The Wi-Fi station stays associated, and AWDL shares its channel:
 
 ```
 userspace/omdrop-discoverable   the radio helper (start, stop, status, peers, probe)
+userspace/owl-profiles          per-driver settings: the supported hardware
 patches/owl-*.patch             our changes to OWL, applied in name order
 tools/build-owl.sh              builds OWL at a pinned commit, with the patches
 tools/stage.sh                  assembles build/lib, laid out like /usr/lib/omdrop
@@ -52,6 +53,42 @@ are fetched at a pinned commit by `tools/stage.sh`, never committed here.
   window; `stop` tears down in about 2 s; a window expires on its own.
 - omdrop's receiver, sender, announcer and BLE wake all work over it,
   unmodified, in both directions.
+
+## Supported hardware
+
+What omdrop-owl does on each Wi-Fi driver comes from
+[`userspace/owl-profiles`](userspace/owl-profiles), one line per driver:
+
+| Driver | Card | Status |
+|---|---|---|
+| `mt7925e` | MediaTek MT7925 (Framework 13) | Tested: both directions, Wi-Fi stays connected |
+
+Any other card falls back to the table's `*` line, which only runs once you
+opt in with `echo 1 | sudo tee /etc/omdrop/allow-untested`.
+
+### Adding your card
+
+Cards that can inject frames from a monitor interface while connected to Wi-Fi
+are the likely candidates. Most mac80211 drivers can, but how they behave
+around it varies, which is what the profile records.
+
+1. Find your driver: `basename $(readlink /sys/class/net/<wifi>/device/driver)`.
+   Put your AP on channel 6, 44 or 149.
+2. Opt in (`/etc/omdrop/allow-untested`), and copy the `*` line to
+   `/etc/omdrop/owl-profiles` with your driver's name. That file is read before
+   the packaged table, so you can change settings without rebuilding.
+3. Try it: turn omdrop on, send a photo from an iPhone, send one back, and turn
+   it off. Then watch Wi-Fi for five minutes (`ping` your router): if it stops
+   receiving after omdrop turns off, keep `reconnect yes`.
+4. If something fails, try the other `mon_mac` setting. Report what you saw
+   either way.
+5. Open a pull request adding your line to `userspace/owl-profiles`, with
+   `status tested` and, in `notes`, the card, kernel version and what you
+   observed.
+
+Cards that can't inject while connected need an "exclusive" mode, which takes
+Wi-Fi away for the window. That mode doesn't exist yet; an issue with what you
+found is welcome.
 
 ## Install
 

@@ -70,6 +70,7 @@ check() {
 package() {
   local lib="${pkgdir}/usr/lib/omdrop" f
   install -Dm755 "${startdir}/userspace/omdrop-discoverable" "${lib}/omdrop-discoverable"
+  install -Dm644 "${startdir}/userspace/owl-profiles" "${lib}/owl-profiles"
   install -Dm755 build/daemon/owl "${lib}/owl"
   for f in "${_from_omdrop_awdl[@]}"; do
     install -Dm755 "omdrop-awdl/userspace/${f}" "${lib}/${f}"

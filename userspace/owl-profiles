@@ -1,0 +1,22 @@
+# How omdrop-owl runs AWDL on each Wi-Fi driver. One line per kernel driver,
+# named as in /sys/class/net/<iface>/device/driver. A card whose driver isn't
+# listed falls back to the "*" line, and only runs with /etc/omdrop/allow-untested.
+# /etc/omdrop/owl-profiles, in the same format, is read before this file: try
+# settings for your card there. To add your card here, see README.md, "Adding
+# your card".
+#
+#   status     tested: works out of the box; untested: needs allow-untested
+#   mode       shared: AWDL shares the AP's channel and Wi-Fi stays connected
+#              (the only mode so far; cards that can't inject while associated
+#              will need an "exclusive" mode that takes Wi-Fi for the window)
+#   mon_mac    station: the monitor interface carries the station's MAC, and OWL
+#              reads it from there; own: it keeps a MAC of its own and OWL is
+#              given the station's (owl -m)
+#   reconnect  yes: force a reconnect after deleting the monitor interface, for
+#              drivers whose station stops receiving after that
+#   mt76_pm    yes: turn mt76 runtime power management off for the window
+#   notes      the rest of the line: the hardware, and what was observed
+#
+# driver   status    mode    mon_mac  reconnect  mt76_pm  notes
+mt7925e    tested    shared  station  yes        yes      MediaTek MT7925 (Framework 13). Injects while associated, sending from the station's MAC; the station ACKs the phone's unicast. Without a reconnect, the station stops receiving 3-165 s after a monitor interface is deleted.
+*          untested  shared  station  yes        no       Any other card. Needs monitor-mode injection while associated, and an AP on channel 6, 44 or 149.
