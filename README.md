@@ -1,5 +1,7 @@
 # omdrop-owl
 
+https://github.com/user-attachments/assets/b195ce4c-e078-49be-bc13-44a72b6dc189
+
 The radio half of [omdrop](https://github.com/brentkearney/omdrop-plugin) for
 machines without Apple's Broadcom Wi-Fi. AWDL runs in userspace through
 [OWL](https://github.com/jedbillyb/owl) on a monitor interface, and omdrop's own
