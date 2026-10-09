@@ -46,7 +46,7 @@ ADV_INTERVAL=3
 VERSION=0.1.0
 # The omdrop-awdl helper contract this follows, which is also the version of
 # omdrop-awdl's tools staged beside it.
-CONTRACT=0.7.0
+CONTRACT=0.8.1
 # Wi-Fi drivers this has been tested on. Other mac80211 cards that can inject
 # from a monitor interface while associated may work too: $CONF/allow-untested
 # containing 1 lets them through.

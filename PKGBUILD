@@ -21,7 +21,7 @@ install="${pkgname}.install"
 
 # Keep in step with ./pins (prepare() checks).
 _owl_commit=832d70f815c3d4a06a02117bf0fc5e868daa1ff0
-_omdrop_awdl_commit=d0d406b7415c923525cda84a970284445ee53f0b
+_omdrop_awdl_commit=534f91a525337951ca19c311e53d333bd6d55100
 source=("owl::git+https://github.com/jedbillyb/owl.git#commit=${_owl_commit}"
         "googletest::git+https://github.com/google/googletest.git"
         "radiotap::git+https://github.com/radiotap/radiotap-library.git"
