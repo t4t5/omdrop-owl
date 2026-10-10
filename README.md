@@ -7,7 +7,8 @@ machines without Apple's Broadcom Wi-Fi. AWDL runs in userspace through
 [OWL](https://github.com/jedbillyb/owl) on a monitor interface, and omdrop's own
 receiver and sender run over it unchanged. First target: the MediaTek MT7925
 (`mt7925e`), as in the Framework 13, where AirDrop works in both directions
-while Wi-Fi stays connected.
+while Wi-Fi stays connected. An Intel AX201 works in an "exclusive" mode that
+takes Wi-Fi away while the machine is visible.
 
 It is a sibling of [omdrop-awdl](https://github.com/brentkearney/omdrop-awdl),
 the Broadcom radio package, and plugs into omdrop the same way: helpers in
@@ -30,6 +31,30 @@ The Wi-Fi station stays associated, and AWDL shares its channel:
    `awdl-airdrop-adv.py --plain` announces `_airdrop._tcp` on it every few
    seconds (`--plain`, because OWL adds the AWDL encapsulation itself).
 
+### Exclusive mode
+
+Some cards can't share. An Intel AX201, while associated, passes up no frame
+from AWDL's BSSID, and may not transmit on 5 GHz. A profile with `mode
+exclusive` takes the station down for the window instead, and `stop` gives it
+back to NetworkManager:
+
+1. **An ad-hoc (IBSS) interface joins a cell whose BSSID is AWDL's own**, on
+   the first of channels 44, 149 and 6 the card may transmit on. AWDL's frames
+   are IBSS frames with that BSSID, so to the firmware the phone is another
+   station of the cell: it ACKs the phone's unicast and sees the phone's ACKs.
+   With a monitor interface alone, the AX201 never registers an ACK and spends
+   100 ms retrying every unicast frame.
+2. **OWL injects through a monitor interface beside it**, with `-F`
+   (`patches/owl-03-fixed-radio.patch`): the phone didn't choose our channel
+   and visits it for a slot or two in sixteen, so OWL sends multicast as it
+   comes instead of in AWDL's multicast slots, and advertises every slot a
+   synchronised peer spends on our channel, not only the sync master's. The
+   helper announces once per availability window for a whole period.
+3. **OWL elects its sync master by metric**, with `-E`
+   (`patches/owl-04-election-metric.patch`), as the Apple devices captured
+   here do. By counter, which is OWL's order, we stayed under a master the
+   iPhone had left, and it never sent us a frame.
+
 From omdrop-awdl we reuse, unmodified, the tools that only talk to `awdl0` or
 BlueZ: `send-to-peer`, `airdrop-send.py`, `ble-airdrop-adv.py`,
 `awdl-airdrop-adv.py`, `awdl-mdns-respond.py` and the modules they import. They
@@ -50,7 +75,8 @@ What omdrop-owl does on each Wi-Fi driver comes from
 | Driver | Card | Status |
 |---|---|---|
 | `mt7925e` | MediaTek MT7925 (Framework 13) | ✅ Tested: both directions, Wi-Fi stays connected |
-| `iwlwifi` | Intel AX200, AX211 | ❌ Doesn't work: drops injected frames while connected, and its firmware won't ACK in monitor mode ([#1](https://github.com/t4t5/omdrop-owl/issues/1), [#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
+| `iwlwifi` | Intel AX201 | ✅ Tested: both directions, Wi-Fi is off while visible ([exclusive mode](#exclusive-mode)) |
+| `iwlwifi` | Intel AX200, AX211 | ❓ Untested in exclusive mode, which works around what stopped them: dropped injected frames while connected, and no ACKs in monitor mode ([#1](https://github.com/t4t5/omdrop-owl/issues/1), [#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
 
 Any other card falls back to the table's `*` line, which only runs once you
 opt in with `echo 1 | sudo tee /etc/omdrop/allow-untested`.
@@ -75,9 +101,8 @@ around it varies, which is what the profile records.
 6. Open a pull request adding your line to `userspace/owl-profiles`, and paste
    the report's `summary.txt`. The other files include your router's MAC.
 
-Cards that can't inject while connected need an "exclusive" mode, which takes
-Wi-Fi away for the window. That mode doesn't exist yet; an issue with what you
-found is welcome.
+Cards that can't inject while connected can try `mode exclusive`, which takes
+Wi-Fi away for the window.
 
 ## Install
 
@@ -99,8 +124,8 @@ sudo apt install ./omdrop-owl_*.deb
 Either way, this builds OWL at the commit pinned in `pins`, with `patches/`,
 and installs it root-owned into `/usr/lib/omdrop` together with
 `omdrop-discoverable` and omdrop-awdl's portable tools, a polkit policy for the
-helper, and a NetworkManager rule keeping `awdl0` and `mon0` unmanaged. It
-conflicts with `brcmfmac-awdl-dkms`: one radio backend at a time.
+helper, and a NetworkManager rule keeping `awdl0`, `mon0` and `awdlibss0`
+unmanaged. It conflicts with `brcmfmac-awdl-dkms`: one radio backend at a time.
 
 Then install omdrop itself (a version with radio-backend support) and turn it
 on from the bar. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
@@ -122,7 +147,12 @@ For development: `just build` assembles the same files in `build/lib`, and
   Injected frames leave at a fixed pace of about one every 2.5 ms, whatever
   PHY rate OWL requests (`owl -R`, from `patches/owl-01-tx-rate.patch`) and
   however many slots the phone offers.
-- **The AP has to be on channel 6, 44 or 149.** Otherwise `start` exits 3 and
-  says so. Taking the card off the AP for the duration of a window would lift
-  this, but isn't implemented.
+- **In shared mode the AP has to be on channel 6, 44 or 149.** Otherwise
+  `start` exits 3 and says so.
+- **Intel cards are slow, and leave you without Wi-Fi while visible.** They
+  may only transmit on channel 6, which an iPhone gives one or two slots in
+  sixteen when idle and five during a transfer: a 1.6 MB photo arrived in
+  16 s. Now and then an upload stalls on its last bytes and goes through on
+  the retry. An iPad beside the iPhone connected once and then stopped ACKing
+  our frames; why isn't known.
 - **iPhones randomise their AWDL address**, so nothing here remembers a peer.
