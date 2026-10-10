@@ -7,8 +7,8 @@
 #
 #   status     tested: works out of the box; untested: needs allow-untested
 #   mode       shared: AWDL shares the AP's channel and Wi-Fi stays connected
-#              (the only mode so far; cards that can't inject while associated
-#              will need an "exclusive" mode that takes Wi-Fi for the window)
+#              exclusive: Wi-Fi is disconnected for the window, for cards that
+#              can't inject, or hear AWDL, while associated (README)
 #   mon_mac    station: the monitor interface carries the station's MAC, and OWL
 #              reads it from there; own: it keeps a MAC of its own and OWL is
 #              given the station's (owl -m)
@@ -19,4 +19,5 @@
 #
 # driver   status    mode    mon_mac  reconnect  mt76_pm  notes
 mt7925e    tested    shared  station  yes        yes      MediaTek MT7925 (Framework 13). Injects while associated, sending from the station's MAC; the station ACKs the phone's unicast. Without a reconnect, the station stops receiving 3-165 s after a monitor interface is deleted.
+iwlwifi    tested    exclusive  station  no       no       Intel AX201, kernel 6.8. Associated, the firmware passes up no AWDL frames. Transmits on channel 6 only (5 GHz is receive-only on Intel): a 1.6 MB photo from an iPhone in 16 s. The AX200 and AX211 are untested.
 *          untested  shared  station  yes        no       Any other card. Needs monitor-mode injection while associated, and an AP on channel 6, 44 or 149.
