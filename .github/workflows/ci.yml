@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly rawhide build: red there does not block PRs.
+    - cron: '23 4 * * 1'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats, shellcheck, libev headers
+        run: sudo apt-get update && sudo apt-get install -y bats shellcheck libev-dev
+      - name: shellcheck
+        # Only the files this branch owns: test-card.sh and build-deb.sh come
+        # from upstream and aren't held to our shellcheck pass here.
+        # --severity=warning skips info-level notes the upstream helper relies
+        # on intentionally (word-splitting an argument string and a list).
+        run: |
+          shellcheck --severity=warning \
+            userspace/omdrop-discoverable \
+            tools/build-owl.sh tools/stage.sh tools/build-rpm.sh tools/run-tests.sh \
+            tests/helpers.bash tests/stubs/*
+      - name: Unit tests
+        run: tools/run-tests.sh
+
+  rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the build toolchain
+        run: dnf install -y rpm-build rpmlint git gcc cmake make libev-devel libpcap-devel libnl3-devel
+      - name: Build the rpm
+        run: tools/build-rpm.sh
+      - name: rpmlint (informational)
+        run: rpmlint omdrop-owl-*.rpm || true
+
+  rpm-rawhide:
+    if: github.event_name == 'schedule'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    container: fedora:rawhide
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the build toolchain
+        run: dnf install -y rpm-build git gcc cmake make libev-devel libpcap-devel libnl3-devel
+      - name: Build the rpm
+        run: tools/build-rpm.sh

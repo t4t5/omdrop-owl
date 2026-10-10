@@ -104,7 +104,18 @@ tools/build-deb.sh
 sudo apt install ./omdrop-owl_*.deb
 ```
 
-Either way, this builds OWL at the commit pinned in `pins`, with `patches/`,
+On Fedora:
+
+```sh
+sudo dnf install rpm-build cmake gcc make git libev-devel libpcap-devel libnl3-devel
+tools/build-rpm.sh
+sudo dnf install ./omdrop-owl-*.rpm
+```
+
+(The rpm uses Fedora package names; other rpm-based distros such as openSUSE
+would rename them.)
+
+Any of these builds OWL at the commit pinned in `pins`, with `patches/`,
 and installs it root-owned into `/usr/lib/omdrop` together with
 `omdrop-discoverable` and omdrop-awdl's portable tools, a polkit policy for the
 helper, and a NetworkManager rule keeping `awdl0`, `mon0` and `awdlibss0`
@@ -115,7 +126,8 @@ on from the bar. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
 anything, is in the way.
 
 For development: `just build` assembles the same files in `build/lib`, and
-`just test` runs the card test against them.
+`just test` runs the card test against them. The unit tests (no radio, no root,
+no network) run with `tools/run-tests.sh` and need [`bats`](https://github.com/bats-core/bats-core).
 
 ## Exclusive mode
 
