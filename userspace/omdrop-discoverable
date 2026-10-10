@@ -116,20 +116,21 @@ mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/c
 
 # ------------------------------------------------------------- exclusive mode
 
-# The first of AWDL's channels this card may transmit on, 5 GHz first: an
-# iPhone gives channel 6 a slot or two in sixteen and 44 or 149 several. One
-# marked "No IR", radar or disabled is receive-only, as all of 5 GHz is on
-# Intel.
-tx_channel() {  # PHY
+# AWDL's channels this card may transmit on, 5 GHz first: an iPhone gives
+# channel 6 a slot or two in sixteen and 44 or 149 several. One marked "No IR",
+# radar or disabled is receive-only. That a channel is allowed doesn't mean an
+# ad-hoc cell can start there: the AX201 refuses every 5 GHz one (EINVAL on
+# 149 under a GB regdomain, where 44 is "No IR" until it has an AP there), so
+# exclusive_up tries them in this order.
+tx_channels() {  # PHY
   local ok c
   ok=$(iw phy "$1" channels 2>/dev/null | awk '
     /^[[:space:]]*\* [0-9]+ MHz/ { if (f && ok) print f; f = $2; ok = !/disabled/; next }
     /No IR|Radar detection/ { ok = 0 }
     END { if (f && ok) print f }')
   for c in 5220 5745 2437; do
-    grep -qx "$c" <<< "$ok" && { echo "$c"; return 0; }
+    grep -qx "$c" <<< "$ok" && echo "$c"
   done
-  return 1
 }
 
 # Take the station off the air and put an ad-hoc vif in its place. AWDL's
@@ -139,24 +140,37 @@ tx_channel() {  # PHY
 # ordinary way. Injected frames carry this vif's MAC, which is how mac80211
 # picks the vif to send them through. A monitor vif alone on the AX201 never
 # sees an ACK, and spends 100 ms retrying every unicast frame.
+# The cell has to be HT. An iPhone sends its unicast at HT rates (MCS 7 at
+# 65 Mbit/s here), which a NOHT cell neither receives nor ACKs; the phone then
+# takes us for unreachable and doesn't try again until it restarts.
+# The cell beacons as rarely as it may (every 10000 TU). Its beacons carry
+# AWDL's BSSID, which no AWDL device beacons with, and an iPhone restarted
+# beside a cell beaconing every 100 TU didn't list us where one beside a cell
+# beaconing every 10 s did (once each).
 # NetworkManager has to let go of the station first, or it brings it straight
 # back; $RUN/exclusive tells `stop` to give it back.
-exclusive_up() {  # STA PHY FREQ
-  echo "$1" > "$RUN/exclusive"
-  nmcli device set "$1" managed no >/dev/null 2>&1
-  ip link set "$1" down
+# Prints the frequency the cell started on.
+exclusive_up() {  # STA PHY FREQ...
+  local sta=$1 phy=$2 f
+  shift 2
+  echo "$sta" > "$RUN/exclusive"
+  nmcli device set "$sta" managed no >/dev/null 2>&1
+  ip link set "$sta" down
   iw dev "$IBSS" del 2>/dev/null
-  iw phy "$2" interface add "$IBSS" type ibss || return 1
-  ip link set "$IBSS" address "$(cat "/sys/class/net/$1/address")"
+  iw phy "$phy" interface add "$IBSS" type ibss || return 1
+  ip link set "$IBSS" address "$(cat "/sys/class/net/$sta/address")"
   # IP runs on awdl0. Left alone, the kernel and avahi take this vif for a
   # network too and send plain IPv6 on AWDL's BSSID.
   sysctl -qw "net.ipv6.conf.$IBSS.disable_ipv6=1" 2>/dev/null
   ip link set "$IBSS" up || return 1
-  iw dev "$IBSS" ibss join omdrop "$3" NOHT fixed-freq "$AWDL_BSSID" || return 1
-  # mac80211 scans the channel once before it starts the cell.
-  for _ in $(seq 40); do
-    iw dev "$IBSS" link 2>/dev/null | grep -q '^Joined IBSS' && return 0
-    sleep 0.25
+  for f in "$@"; do
+    iw dev "$IBSS" ibss join omdrop "$f" HT20 fixed-freq "$AWDL_BSSID" beacon-interval 10000 >&2 || continue
+    # mac80211 scans the channel once before it starts the cell.
+    for _ in $(seq 40); do
+      iw dev "$IBSS" link 2>/dev/null | grep -q '^Joined IBSS' && { echo "$f"; return 0; }
+      sleep 0.25
+    done
+    iw dev "$IBSS" ibss leave 2>/dev/null
   done
   return 1
 }
@@ -321,8 +335,8 @@ supervise() {
 }
 
 cmd_start() {
-  local secs=${1:-} sta drv phy gw ap chan stamac monmac mt76 _
-  local owl_extra=()
+  local secs=${1:-} sta drv phy gw ap freqs chan stamac monmac mt76 _
+  local owl_extra=() strategy=intersect
   [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: omdrop-discoverable start <seconds>" 2
   need_root
   mkdir -p "$RUN"
@@ -350,7 +364,13 @@ cmd_start() {
   phy=$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")
   if [ "$PROF_MODE" = exclusive ]; then
     gw=none
-    ap=$(tx_channel "$phy") || die "this Wi-Fi card may not transmit on any of AirDrop's channels (6, 44, 149) here" 4
+    freqs=$(tx_channels "$phy")
+    [ -n "$freqs" ] || die "this Wi-Fi card may not transmit on any of AirDrop's channels (6, 44, 149) here" 4
+    # From here a failure has to give Wi-Fi back, which is cmd_stop's job.
+    if ! ap=$(exclusive_up "$sta" "$phy" $freqs); then
+      cmd_stop start-failed >/dev/null
+      die "could not start the ad-hoc interface $IBSS on any of AirDrop's channels" 4
+    fi
   else
     # Wi-Fi takes a few seconds after a driver reload to associate and get an
     # address; don't judge a link that's still coming up.
@@ -372,11 +392,6 @@ cmd_start() {
   echo "$drv $PROF_MODE $PROF_MONMAC $PROF_RECONNECT $PROF_PM" > "$RUN/profile"
   log "station $sta ($stamac, $drv) on ch$chan, gateway $gw; profile: mode=$PROF_MODE mon_mac=$PROF_MONMAC reconnect=$PROF_RECONNECT mt76_pm=$PROF_PM"
 
-  # From here a failure has to give Wi-Fi back, which is cmd_stop's job.
-  if [ "$PROF_MODE" = exclusive ] && ! exclusive_up "$sta" "$phy" "$ap"; then
-    cmd_stop start-failed >/dev/null
-    die "could not start the ad-hoc interface $IBSS on channel $chan" 4
-  fi
   iw dev "$MON" del 2>/dev/null
   if ! iw phy "$phy" interface add "$MON" type monitor; then
     cmd_stop start-failed >/dev/null
@@ -396,8 +411,15 @@ cmd_start() {
     cmd_stop start-failed >/dev/null
     die "could not bring $MON up" 4
   fi
-  # owl -F, -E: patches/owl-03-fixed-radio.patch, owl-04-election-metric.patch
-  [ "$PROF_MODE" = exclusive ] && owl_extra+=(-F -E)
+  # owl -F, -E: patches/owl-03-fixed-radio.patch, owl-04-election-metric.patch.
+  # -S pin advertises our one channel in all sixteen slots, which with -F is
+  # where we are (patches/owl-06-fixed-radio-pin.patch), rather than only the
+  # slots the phone already gives it: those move while the phone makes room
+  # for us, and the intersection trails them by a tick.
+  if [ "$PROF_MODE" = exclusive ]; then
+    owl_extra+=(-F -E)
+    strategy=pin
+  fi
 
   # mt76_pm: runtime PM off for the window, restored by stop.
   mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
@@ -411,7 +433,7 @@ cmd_start() {
   if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
   # 9>&-: children must not inherit the lock, or the long-lived ones would hold
   # it for the whole window and the next `stop` would wait forever.
-  setsid "$OWL_BIN" -i "$MON" -c "$chan" -N -S intersect "${owl_extra[@]}" -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
+  setsid "$OWL_BIN" -i "$MON" -c "$chan" -N -S "$strategy" "${owl_extra[@]}" -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
   echo $! > "$RUN/owl.pid"
   for _ in $(seq 20); do ip link show "$IF" >/dev/null 2>&1 && break; sleep 0.5; done
   if ! ip link show "$IF" >/dev/null 2>&1; then

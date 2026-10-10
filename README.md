@@ -34,22 +34,32 @@ The Wi-Fi station stays associated, and AWDL shares its channel:
 ### Exclusive mode
 
 Some cards can't share. An Intel AX201, while associated, passes up no frame
-from AWDL's BSSID, and may not transmit on 5 GHz. A profile with `mode
-exclusive` takes the station down for the window instead, and `stop` gives it
-back to NetworkManager:
+from AWDL's BSSID. A profile with `mode exclusive` takes the station down for
+the window instead, and `stop` gives it back to NetworkManager:
 
 1. **An ad-hoc (IBSS) interface joins a cell whose BSSID is AWDL's own**, on
-   the first of channels 44, 149 and 6 the card may transmit on. AWDL's frames
-   are IBSS frames with that BSSID, so to the firmware the phone is another
-   station of the cell: it ACKs the phone's unicast and sees the phone's ACKs.
-   With a monitor interface alone, the AX201 never registers an ACK and spends
-   100 ms retrying every unicast frame.
+   the first of channels 44, 149 and 6 where the card will start one. AWDL's
+   frames are IBSS frames with that BSSID, so to the firmware the phone is
+   another station of the cell: it ACKs the phone's unicast and sees the
+   phone's ACKs. With a monitor interface alone, the AX201 never registers an
+   ACK and spends 100 ms retrying every unicast frame. The cell is HT20: an
+   iPhone sends its unicast at HT rates, which a cell without HT neither
+   receives nor ACKs, and the phone then gives up on us until it restarts. The
+   cell beacons only every 10 s: its beacons carry AWDL's BSSID, which no AWDL
+   device beacons with, and at the usual rate a restarted iPhone didn't list
+   us. The AX201 starts no cell on 5 GHz, so it ends up on channel 6.
 2. **OWL injects through a monitor interface beside it**, with `-F`
    (`patches/owl-03-fixed-radio.patch`): the phone didn't choose our channel
    and visits it for a slot or two in sixteen, so OWL sends multicast as it
-   comes instead of in AWDL's multicast slots, and advertises every slot a
-   synchronised peer spends on our channel, not only the sync master's. The
-   helper announces once per availability window for a whole period.
+   comes instead of in AWDL's multicast slots, and with `-S pin`
+   (`patches/owl-06-fixed-radio-pin.patch`) advertises our channel in all
+   sixteen slots, which is where a fixed radio is. The helper announces once
+   per availability window for a whole period. Unicast
+   goes out once, without waiting for an ACK
+   (`patches/owl-05-fixed-radio-noack.patch`): the AX201 retries a missed
+   frame 15 times over 75-140 ms, long after the phone has left, and every
+   frame queued behind it waits, until the transfer stalls on "Waiting". TCP
+   resends a lost frame sooner.
 3. **OWL elects its sync master by metric**, with `-E`
    (`patches/owl-04-election-metric.patch`), as the Apple devices captured
    here do. By counter, which is OWL's order, we stayed under a master the
@@ -149,10 +159,9 @@ For development: `just build` assembles the same files in `build/lib`, and
   however many slots the phone offers.
 - **In shared mode the AP has to be on channel 6, 44 or 149.** Otherwise
   `start` exits 3 and says so.
-- **Intel cards are slow, and leave you without Wi-Fi while visible.** They
-  may only transmit on channel 6, which an iPhone gives one or two slots in
-  sixteen when idle and five during a transfer: a 1.6 MB photo arrived in
-  16 s. Now and then an upload stalls on its last bytes and goes through on
-  the retry. An iPad beside the iPhone connected once and then stopped ACKing
-  our frames; why isn't known.
+- **Intel cards are slow, and leave you without Wi-Fi while visible.** The
+  AX201 runs AWDL on channel 6, which an iPhone gives one or two slots in
+  sixteen when idle and more during a transfer: a 2.4 MB photo took 17 s from
+  an iPhone and 10.5 s to it. An iPad beside the iPhone connected once and
+  then stopped ACKing our frames; why isn't known.
 - **iPhones randomise their AWDL address**, so nothing here remembers a peer.

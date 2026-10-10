@@ -15,6 +15,10 @@
 #                           any peer is on it
 #   owl-04-election-metric.patch  -E: elect the sync master by metric before
 #                           counter, as Apple devices do
+#   owl-05-fixed-radio-noack.patch  with -F, unicast data goes out once, with
+#                           no ACK expected and so no retries
+#   owl-06-fixed-radio-pin.patch  with -F, -S pin pins -c's channel, not the
+#                           peer's favourite
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 

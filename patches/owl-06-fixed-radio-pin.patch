@@ -1,0 +1,16 @@
+diff --git a/daemon/core.c b/daemon/core.c
+index 47311c6..c19ccea 100644
+--- a/daemon/core.c
++++ b/daemon/core.c
+@@ -420,6 +420,11 @@ static void awdl_adopt_chanseq(struct daemon_state *state) {
+ 			                                                        AWDL_CHAN_ENC_OPCLASS));
+ 			struct awdl_chan chan;
+ 
++			/* -F: the radio never leaves -c's channel, so that is the one we are on
++			 * in every slot, whatever the peer favours. */
++			if (awdl->channel.fixed_radio)
++				want = awdl_chan_num(awdl->channel.master, AWDL_CHAN_ENC_OPCLASS);
++
+ 			if (!want)
+ 				return; /* peer advertised nothing usable; keep what we have */
+ 			if (awdl->channel.pinned_chan == want)
