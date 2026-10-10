@@ -159,8 +159,8 @@ exclusive_up() {  # STA PHY FREQ...
   sysctl -n "net.ipv6.conf.$sta.disable_ipv6" > "$RUN/ipv6" || return 1
   echo "$sta" > "$RUN/exclusive"
   nmcli -w 10 device disconnect "$sta" >/dev/null 2>&1 || true
-  nmcli device set "$sta" managed no >/dev/null 2>&1
-  ip link set "$sta" down
+  nmcli device set "$sta" managed no >/dev/null 2>&1 || return 1
+  ip link set "$sta" down || return 1
   iw dev "$IBSS" del 2>/dev/null
   if iw phy "$phy" interface add "$IBSS" type ibss; then
     ip link set "$IBSS" address "$(cat "/sys/class/net/$sta/address")" || return 1
@@ -174,7 +174,7 @@ exclusive_up() {  # STA PHY FREQ...
   fi
   # IP runs on awdl0. Left alone, the kernel and avahi take this vif for a
   # network too and send plain IPv6 on AWDL's BSSID.
-  sysctl -qw "net.ipv6.conf.$cell.disable_ipv6=1" 2>/dev/null
+  sysctl -qw "net.ipv6.conf.$cell.disable_ipv6=1" 2>/dev/null || return 1
   ip link set "$cell" up || return 1
   for f in "$@"; do
     iw dev "$cell" ibss join omdrop "$f" HT20 fixed-freq "$AWDL_BSSID" beacon-interval 10000 >&2 || continue
@@ -196,7 +196,7 @@ exclusive_down() {
   [ -n "$sta" ] || return 0
   if [ -e "$RUN/converted" ]; then
     iw dev "$sta" ibss leave 2>/dev/null
-    ip link set "$sta" down 2>/dev/null
+    ip link set "$sta" down 2>/dev/null || return 1
     iw dev "$sta" set type managed || return 1
     ipv6=$(cat "$RUN/ipv6")
     sysctl -qw "net.ipv6.conf.$sta.disable_ipv6=$ipv6" || return 1
@@ -204,8 +204,8 @@ exclusive_down() {
     iw dev "$IBSS" ibss leave 2>/dev/null
     iw dev "$IBSS" del 2>/dev/null
   fi
-  ip link set "$sta" up 2>/dev/null
-  nmcli device set "$sta" managed yes >/dev/null 2>&1
+  ip link set "$sta" up 2>/dev/null || return 1
+  nmcli device set "$sta" managed yes >/dev/null 2>&1 || return 1
   uuid=$(cat "$RUN/connection" 2>/dev/null)
   if [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
     for _ in $(seq 10); do
