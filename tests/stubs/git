@@ -1,0 +1,27 @@
+#!/bin/bash
+# Stand-in for git: never talks to the network. clone creates the target with
+# a .git marker and the omdrop-awdl userspace files stage.sh copies; apply
+# succeeds unless TEST_GIT_APPLY_FAIL is set. The subcommand is located after
+# skipping global-option pairs (git -C <dir> ...), the way build-owl.sh calls
+# `git -C "$DIR" apply`.
+printf '%s\n' "$*" >> "${TEST_TMP:?}/git.log"
+args=("$@")
+action=""
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [ "${args[$i]}" = -C ]; then i=$(( i + 1 )); continue; fi
+  action=${args[$i]}
+  break
+done
+case "$action" in
+  clone)
+    dir=""
+    for a in "$@"; do dir=$a; done
+    mkdir -p "$dir/.git" "$dir/userspace"
+    for f in send-to-peer airdrop-send.py awdl-af-parse.py awdl_identity.py \
+             awdl_debug.py ble-airdrop-adv.py awdl-airdrop-adv.py awdl-mdns-respond.py; do
+      printf '#!/bin/sh\nexit 0\n' > "$dir/userspace/$f"
+    done
+    ;;
+  apply) exit "${TEST_GIT_APPLY_FAIL:-0}" ;;
+esac
+exit 0

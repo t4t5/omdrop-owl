@@ -23,8 +23,12 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-DIR=$ROOT/upstream/owl
+# OMDROP_UPSTREAM_ROOT exists only for the unit tests, which run unprivileged
+# and must not touch a developer's real upstream/ checkout.
+UPSTREAM=${OMDROP_UPSTREAM_ROOT:-$ROOT}
+DIR=$UPSTREAM/upstream/owl
 OWL_REPO=https://github.com/jedbillyb/owl.git
+# shellcheck disable=SC1091
 . "$ROOT/pins"
 
 [ -f /usr/include/ev.h ] || { echo "libev headers missing (Arch: sudo pacman -S libev; Debian, Ubuntu: sudo apt install libev-dev)"; exit 1; }
@@ -50,4 +54,4 @@ BIN=$DIR/build/daemon/owl
 case "$("$BIN" -S intersect -R 12 -m 02:00:00:00:00:01 -F -E -h 2>&1 || true)" in
   *"invalid option"*|*"-R takes"*|*"-m takes"*) echo "$BIN lacks -S, -R, -m, -F or -E; did the patches apply?"; exit 1 ;;
 esac
-echo "built $BIN: owl@${OWL_COMMIT:0:7} + $(ls "$ROOT"/patches/owl-*.patch | wc -l) patches"
+echo "built $BIN: owl@${OWL_COMMIT:0:7} + $(find "$ROOT/patches" -name 'owl-*.patch' | wc -l) patches"

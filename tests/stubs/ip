@@ -1,0 +1,14 @@
+#!/bin/bash
+# Stand-in for ip. Failures are driven by TEST_NO_GW / TEST_NO_AWDL_IF /
+# TEST_NO_AWDL_ADDR; everything else succeeds silently. All arguments are
+# logged so tests can assert how the interface was set up.
+printf '%s\n' "$*" >> "${TEST_TMP:?}/ip.log"
+case "$*" in
+  *"route show default"*)
+    [ "${TEST_NO_GW:-}" = 1 ] || echo "default via 192.168.1.1 dev wlan0 proto dhcp metric 600" ;;
+  *"addr show dev awdl0 scope link"*)
+    [ "${TEST_NO_AWDL_ADDR:-}" = 1 ] || echo "    inet6 fe80::7a:1ff:fe23:4567/64 scope link" ;;
+  *"link show awdl0"*)
+    [ "${TEST_NO_AWDL_IF:-}" = 1 ] && exit 1 ;;
+esac
+exit 0

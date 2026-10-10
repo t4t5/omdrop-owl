@@ -1,0 +1,10 @@
+#!/bin/bash
+# Stand-in for cmake: records its arguments and produces the owl binary the
+# build-owl.sh smoke check runs.
+printf '%s\n' "$*" >> "${TEST_TMP:?}/cmake.log"
+if [ "$1" = --build ]; then
+  mkdir -p "$2/daemon"
+  printf '#!/bin/sh\necho "usage: owl [-h] [options]"\n' > "$2/daemon/owl"
+  chmod +x "$2/daemon/owl"
+fi
+exit 0

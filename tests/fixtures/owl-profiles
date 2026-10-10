@@ -1,0 +1,9 @@
+# The profile table the omdrop-discoverable tests run against. Same format as
+# userspace/owl-profiles. The non-MTK row is an explicitly fictional driver
+# ("testfake", shared, reconnect=no) so the shared-mode knob paths are
+# exercised WITHOUT labelling any real card: no real hardware name appears as
+# tested here.
+mt7925e    tested    shared  station  yes        no      MediaTek MT7925 (Framework 13)
+testfake   tested    shared  station  no         no      Fictional test driver, no reconnect needed
+*          untested  shared  station  yes        no      Any other card
+

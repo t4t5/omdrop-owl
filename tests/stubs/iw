@@ -1,0 +1,18 @@
+#!/bin/bash
+# Stand-in for iw: answers only for the wlan0 station the fixtures create, so
+# a glob-literal interface name ("*") reads as "not a managed interface" the
+# way a missing iw would. The AP's frequency comes from TEST_FREQ (MHz);
+# TEST_NO_LINK simulates a station that isn't associated. Every call is logged
+# so tests can assert the paths used (the fake OMDROP_NET_DIR, not real sysfs).
+printf '%s\n' "$*" >> "${TEST_TMP:?}/iw.log"
+case "$*" in
+  "dev wlan0 info")
+    echo "Interface wlan0"
+    echo "	type managed" ;;
+  "dev wlan0 link")
+    [ "${TEST_NO_LINK:-}" = 1 ] && exit 0
+    echo "Connected to 00:11:22:33:44:55 (on wlan0)"
+    echo "	freq: ${TEST_FREQ:-2437.0}" ;;
+esac
+# Everything else (interface add/del, monitor setup) succeeds silently.
+exit 0
