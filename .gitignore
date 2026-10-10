@@ -10,5 +10,6 @@
 /src/
 /pkg/
 /*.pkg.tar.*
+/*.deb
 
 owl-test-*
