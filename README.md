@@ -85,8 +85,12 @@ What omdrop-owl does on each Wi-Fi driver comes from
 | Driver | Card | Status |
 |---|---|---|
 | `mt7925e` | MediaTek MT7925 (Framework 13) | ✅ Tested: both directions, Wi-Fi stays connected |
-| `iwlwifi` | Intel AX201 | ✅ Tested: both directions, Wi-Fi is off while visible ([exclusive mode](#exclusive-mode)) |
-| `iwlwifi` | Intel AX200, AX211 | ❓ Untested in exclusive mode, which works around what stopped them: dropped injected frames while connected, and no ACKs in monitor mode ([#1](https://github.com/t4t5/omdrop-owl/issues/1), [#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
+| `iwlwifi` | Intel AX201 | ✅ Tested: both directions on Ubuntu 24.04 (kernel 6.8), Wi-Fi is off while visible ([exclusive mode](#exclusive-mode)) |
+| `iwlwifi` | Intel AX200 | ❓ Untested in exclusive mode. Shared mode doesn't work: the driver drops injected frames while connected ([#1](https://github.com/t4t5/omdrop-owl/issues/1)) |
+| `iwlwifi` | Intel AX211 | ❓ Untested in exclusive mode. Shared mode doesn't work, monitor mode never ACKs, and an ad-hoc interface beside a connected station crashed its firmware ([#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
+
+The profile is per driver, so the `iwlwifi` line covers every Intel card: the
+AX200 and AX211 run in exclusive mode too, without the opt-in below.
 
 Any other card falls back to the table's `*` line, which only runs once you
 opt in with `echo 1 | sudo tee /etc/omdrop/allow-untested`.
