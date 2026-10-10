@@ -10,3 +10,5 @@
 /src/
 /pkg/
 /*.pkg.tar.*
+
+owl-test-*
