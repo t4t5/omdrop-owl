@@ -1,0 +1,21 @@
+diff --git i/src/rx.c w/src/rx.c
+index 4581ae5..bfbab6b 100644
+--- i/src/rx.c
++++ w/src/rx.c
+@@ -321,6 +321,16 @@ int awdl_rx_action(const struct buf *frame, signed char rssi, uint64_t tsft,
+ 		buf_strip(frame, len);
+ 	}
+ 
++	/* Some discovery frames end with zero padding shorter than a TLV header.
++	 * Only accept that padding: nonzero bytes still mean a truncated TLV. */
++	if (buf_len(frame) > 0 && buf_len(frame) < 3) {
++		int padding = 1;
++		for (int i = 0; i < buf_len(frame); i++)
++			if (buf_data(frame)[i] != 0)
++				padding = 0;
++		if (padding)
++			buf_strip(frame, buf_len(frame));
++	}
+ 	if (buf_len(frame) > 0) {
+ 		log_debug("awdl_action: unexpected bytes (%d) at end of frame", buf_len(frame));
+ 		return RX_UNEXPECTED_FORMAT;
