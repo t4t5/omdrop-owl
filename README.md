@@ -30,20 +30,6 @@ The Wi-Fi station stays associated, and AWDL shares its channel:
    `awdl-airdrop-adv.py --plain` announces `_airdrop._tcp` on it every few
    seconds (`--plain`, because OWL adds the AWDL encapsulation itself).
 
-## Layout
-
-```
-userspace/omdrop-discoverable   the radio helper (start, stop, status, peers, probe)
-userspace/owl-profiles          per-driver settings: the supported hardware
-patches/owl-*.patch             our changes to OWL, applied in name order
-tools/build-owl.sh              builds OWL at a pinned commit, with the patches
-tools/stage.sh                  assembles build/lib, laid out like /usr/lib/omdrop
-tools/build-deb.sh              packs build/lib into a .deb (PKGBUILD's counterpart)
-packaging/deb/                  the .deb's maintainer scripts
-build/lib/                      (generated) ours, OWL, and omdrop-awdl's portable tools
-upstream/                       (generated) OWL and omdrop-awdl at pinned commits
-```
-
 From omdrop-awdl we reuse, unmodified, the tools that only talk to `awdl0` or
 BlueZ: `send-to-peer`, `airdrop-send.py`, `ble-airdrop-adv.py`,
 `awdl-airdrop-adv.py`, `awdl-mdns-respond.py` and the modules they import. They
@@ -51,12 +37,10 @@ are fetched at a pinned commit by `tools/stage.sh`, never committed here.
 
 ## Status
 
-- `omdrop-discoverable` implements the whole contract. Checked on the MT7925:
-  `start` returns in under 2 s with `awdl0` usable, announcements going out and
-  the phone listed by `peers`; a second `start` returns 5 and adjusts the
-  window; `stop` tears down in about 2 s; a window expires on its own.
-- omdrop's receiver, sender, announcer and BLE wake all work over it,
-  unmodified, in both directions.
+`omdrop-discoverable` implements the whole contract. Checked on the MT7925:
+`start` returns in about 2 s with `awdl0` usable, announcements going out and
+the phone listed by `peers`; a second `start` returns 5 and adjusts the window;
+`stop` tears down in about 2 s; a window expires on its own.
 
 ## Supported hardware
 
@@ -81,14 +65,14 @@ around it varies, which is what the profile records.
 2. Opt in (`/etc/omdrop/allow-untested`), and copy the `*` line to
    `/etc/omdrop/owl-profiles` with your driver's name. That file is read before
    the packaged table, so you can change settings without rebuilding.
-3. Try it: turn omdrop on, send a photo from an iPhone, send one back, and turn
-   it off. Then watch Wi-Fi for five minutes (`ping` your router): if it stops
-   receiving after omdrop turns off, keep `reconnect yes`.
-4. If something fails, try the other `mon_mac` setting. Report what you saw
-   either way.
-5. Open a pull request adding your line to `userspace/owl-profiles`, with
-   `status tested` and, in `notes`, the card, kernel version and what you
-   observed.
+3. Run `sudo tools/test-card.sh`. It walks you through a photo each way,
+   watches Wi-Fi for five minutes after teardown, and writes a report.
+4. To see if your card needs `reconnect yes`, run it again after
+   `echo 0 | sudo tee /etc/omdrop/reconnect-after`. If Wi-Fi stops after
+   teardown, it does (reload the driver to recover). Delete the file after.
+5. If something fails, try the other `mon_mac` setting.
+6. Open a pull request adding your line to `userspace/owl-profiles`, and paste
+   the report's `summary.txt`. The other files include your router's MAC.
 
 Cards that can't inject while connected need an "exclusive" mode, which takes
 Wi-Fi away for the window. That mode doesn't exist yet; an issue with what you
@@ -121,8 +105,8 @@ Then install omdrop itself (a version with radio-backend support) and turn it
 on from the bar. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
 anything, is in the way.
 
-For development without installing, `tools/build-owl.sh` and `tools/stage.sh`
-assemble the same files in `build/lib`.
+For development: `just build` assembles the same files in `build/lib`, and
+`just test` runs the card test against them.
 
 ## Known issues
 
@@ -132,8 +116,7 @@ assemble the same files in `build/lib`.
   to a few minutes later, until `mt7925e` is reloaded. That makes it an
   mt76/firmware bug. omdrop's contract forbids the radio helper from reloading
   the driver, so `stop` forces a reconnect right after deleting the interface
-  instead. In testing, that kept the station healthy for the four minutes
-  watched after every teardown.
+  instead. That has kept the station healthy in every test so far.
 - **Sending is slower than receiving** (about 490 kB/s against 1.3 MB/s).
   Injected frames leave at a fixed pace of about one every 2.5 ms, whatever
   PHY rate OWL requests (`owl -R`, from `patches/owl-01-tx-rate.patch`) and

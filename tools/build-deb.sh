@@ -58,6 +58,7 @@ EOF
 mkdir -p "$WORK/debian"
 printf 'Source: %s\n\nPackage: %s\nArchitecture: any\n' "$PKG" "$PKG" > "$WORK/debian/control"
 SHLIBS=$(cd "$WORK" && dpkg-shlibdeps -O "$D/usr/lib/omdrop/owl" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+[ -n "$SHLIBS" ] || { echo "dpkg-shlibdeps found no library dependencies for owl"; exit 1; }
 
 install -d "$D/DEBIAN"
 install -m755 "$ROOT/packaging/deb/postinst" "$ROOT/packaging/deb/prerm" "$D/DEBIAN/"
