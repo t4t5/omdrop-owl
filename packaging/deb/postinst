@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = configure ]; then
+  # NetworkManager reads conf.d only at startup or on a reload, so keeping
+  # awdl0 and mon0 unmanaged isn't in force until something rereads it.
+  # `reload conf` touches no connection.
+  if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    nmcli general reload conf >/dev/null 2>&1 \
+      || echo "  Could not reload NetworkManager's configuration. Run: sudo nmcli general reload conf"
+  fi
+  cat <<'MSG'
+  omdrop-owl is omdrop's radio half for Wi-Fi cards without Apple's Broadcom
+  firmware. Nothing runs until omdrop asks. Install omdrop itself, in a
+  version that supports radio backends (docs/radio-backend.md), and turn it
+  on from there.
+
+  Your Wi-Fi access point has to be on channel 6, 44 or 149: AirDrop shares
+  its channel. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
+  anything, is in the way.
+MSG
+fi
+
+exit 0

@@ -38,6 +38,8 @@ userspace/owl-profiles          per-driver settings: the supported hardware
 patches/owl-*.patch             our changes to OWL, applied in name order
 tools/build-owl.sh              builds OWL at a pinned commit, with the patches
 tools/stage.sh                  assembles build/lib, laid out like /usr/lib/omdrop
+tools/build-deb.sh              packs build/lib into a .deb (PKGBUILD's counterpart)
+packaging/deb/                  the .deb's maintainer scripts
 build/lib/                      (generated) ours, OWL, and omdrop-awdl's portable tools
 upstream/                       (generated) OWL and omdrop-awdl at pinned commits
 ```
@@ -94,15 +96,26 @@ found is welcome.
 
 ## Install
 
+On Arch:
+
 ```sh
 makepkg -si
 ```
 
-This builds OWL at the commit pinned in `pins`, with `patches/`, and installs it
-root-owned into `/usr/lib/omdrop` together with `omdrop-discoverable` and
-omdrop-awdl's portable tools, a polkit policy for the helper, and a
-NetworkManager rule keeping `awdl0` and `mon0` unmanaged. It conflicts with
-`brcmfmac-awdl-dkms`: one radio backend at a time.
+On Debian or Ubuntu:
+
+```sh
+sudo apt install build-essential cmake git pkg-config dpkg-dev \
+  libev-dev libpcap-dev libnl-3-dev libnl-genl-3-dev
+tools/build-deb.sh
+sudo apt install ./omdrop-owl_*.deb
+```
+
+Either way, this builds OWL at the commit pinned in `pins`, with `patches/`,
+and installs it root-owned into `/usr/lib/omdrop` together with
+`omdrop-discoverable` and omdrop-awdl's portable tools, a polkit policy for the
+helper, and a NetworkManager rule keeping `awdl0` and `mon0` unmanaged. It
+conflicts with `brcmfmac-awdl-dkms`: one radio backend at a time.
 
 Then install omdrop itself (a version with radio-backend support) and turn it
 on from the bar. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
