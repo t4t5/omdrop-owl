@@ -1,0 +1,4 @@
+#!/bin/bash
+# Stand-in for nmcli: records its arguments so tests can assert reconnects.
+printf '%s\n' "$*" >> "${TEST_TMP:?}/nmcli.log"
+exit 0

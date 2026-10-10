@@ -1,0 +1,4 @@
+#!/bin/bash
+# Stand-in for sleep: the retry loops in `start` and `stop` must not slow the
+# tests down.
+exit 0

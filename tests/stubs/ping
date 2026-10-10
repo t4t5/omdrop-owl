@@ -1,0 +1,4 @@
+#!/bin/bash
+# Stand-in for ping: the gateway answers unless TEST_PING_FAIL is set.
+[ "${TEST_PING_FAIL:-}" = 1 ] && exit 1
+exit 0

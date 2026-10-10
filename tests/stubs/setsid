@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stand-in for setsid: records the command instead of running it, so `start`
+# never really launches OWL or the supervisor loop.
+printf '%s\n' "$*" >> "${TEST_TMP:?}/setsid.log"
+exit 0

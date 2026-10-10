@@ -32,12 +32,16 @@
 #
 # ROOT: required. Callers come through pkexec, which drops the environment, so
 # everything lives at fixed paths: helpers beside this script (/usr/lib/omdrop
-# when packaged), state in $RUN, tunables in $CONF.
+# when packaged), state in $RUN, tunables in $CONF. OMDROP_RUN, OMDROP_NET_DIR
+# and OMDROP_DEBUGFS exist only for the unit tests, which run unprivileged on
+# machines without the hardware; unset, nothing changes.
 set -uo pipefail
 
 SELF=$(readlink -f "$0")
 LIB=$(dirname "$SELF")
-RUN=/run/omdrop-owl
+RUN=${OMDROP_RUN:-/run/omdrop-owl}
+NET=${OMDROP_NET_DIR:-/sys/class/net}
+DEBUGFS=${OMDROP_DEBUGFS:-/sys/kernel/debug}
 CONF=${OMDROP_CONF:-/etc/omdrop}
 OWL_LOG=$RUN/owl.log
 IF=awdl0
@@ -82,7 +86,7 @@ station_iface() {
   local forced d name
   forced=$(knob infra-iface)
   [ -n "$forced" ] && { echo "$forced"; return; }
-  for d in /sys/class/net/*/phy80211; do
+  for d in "$NET"/*/phy80211; do
     name=$(basename "$(dirname "$d")")
     [ "$name" = "$IF" ] || [ "$name" = "$MON" ] || [ "$name" = "$IBSS" ] && continue
     iw dev "$name" info 2>/dev/null | grep -q 'type managed' || continue
@@ -91,7 +95,7 @@ station_iface() {
   done
 }
 
-driver_of() { basename "$(readlink -f "/sys/class/net/$1/device/driver")" 2>/dev/null; }
+driver_of() { basename "$(readlink -f "$NET/$1/device/driver")" 2>/dev/null; }
 
 # This driver's line in owl-profiles, else the "*" line: sets PROF_STATUS,
 # PROF_MODE, PROF_MONMAC, PROF_RECONNECT and PROF_PM (see owl-profiles).
@@ -112,7 +116,7 @@ untested_hint() {
   echo "omdrop-owl hasn't been tested on this computer's Wi-Fi (${1:-unknown driver}). To try it anyway, put 1 in $CONF/allow-untested, and please report how it goes (README, \"Adding your card\")."
 }
 
-mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/class/net/$1/phy80211")")/mt76"; }
+mt76_dir() { echo "$DEBUGFS/ieee80211/$(basename "$(readlink -f "$NET/$1/phy80211")")/mt76"; }
 
 # ------------------------------------------------------------- exclusive mode
 
@@ -158,7 +162,7 @@ exclusive_up() {  # STA PHY FREQ...
   ip link set "$sta" down
   iw dev "$IBSS" del 2>/dev/null
   iw phy "$phy" interface add "$IBSS" type ibss || return 1
-  ip link set "$IBSS" address "$(cat "/sys/class/net/$sta/address")"
+  ip link set "$IBSS" address "$(cat "$NET/$sta/address")"
   # IP runs on awdl0. Left alone, the kernel and avahi take this vif for a
   # network too and send plain IPv6 on AWDL's BSSID.
   sysctl -qw "net.ipv6.conf.$IBSS.disable_ipv6=1" 2>/dev/null
@@ -361,7 +365,7 @@ cmd_start() {
     die "$(untested_hint "$drv")" 4
   fi
   [ "$PROF_MODE" = shared ] || [ "$PROF_MODE" = exclusive ] || die "this Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet" 4
-  phy=$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")
+  phy=$(basename "$(readlink -f "$NET/$sta/phy80211")")
   if [ "$PROF_MODE" = exclusive ]; then
     gw=none
     freqs=$(tx_channels "$phy")
@@ -387,7 +391,7 @@ cmd_start() {
     2437) chan=6 ;; 5220) chan=44 ;; 5745) chan=149 ;;
     *) die "your Wi-Fi network is on ${ap:-an unknown} MHz, but AirDrop can only share channel 6, 44 or 149 with it. Moving the router to one of those makes this work." 3 ;;
   esac
-  stamac=$(cat "/sys/class/net/$sta/address")
+  stamac=$(cat "$NET/$sta/address")
   echo "$sta" > "$RUN/station"
   echo "$drv $PROF_MODE $PROF_MONMAC $PROF_RECONNECT $PROF_PM" > "$RUN/profile"
   log "station $sta ($stamac, $drv) on ch$chan, gateway $gw; profile: mode=$PROF_MODE mon_mac=$PROF_MONMAC reconnect=$PROF_RECONNECT mt76_pm=$PROF_PM"
@@ -422,7 +426,7 @@ cmd_start() {
   fi
 
   # mt76_pm: runtime PM off for the window, restored by stop.
-  mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+  mountpoint -q "$DEBUGFS" || mount -t debugfs none "$DEBUGFS" 2>/dev/null
   mt76=$(mt76_dir "$sta")
   if [ "$PROF_PM" = yes ] && [ -w "$mt76/runtime-pm" ]; then
     echo "$(cat "$mt76/runtime-pm") $(cat "$mt76/deep-sleep")" > "$RUN/pm"

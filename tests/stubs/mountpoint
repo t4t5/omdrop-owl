@@ -1,0 +1,3 @@
+#!/bin/bash
+# Stand-in for mountpoint/mount: debugfs is always considered mounted.
+exit 0

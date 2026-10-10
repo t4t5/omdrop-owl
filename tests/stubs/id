@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stand-in for id: the script under test must see root unless TEST_FAKE_UID says
+# otherwise. Real id is used for anything else.
+[ "$1" = -u ] && { echo "${TEST_FAKE_UID:-0}"; exit 0; }
+exec /usr/bin/id "$@"

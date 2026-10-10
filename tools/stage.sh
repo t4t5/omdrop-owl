@@ -11,11 +11,15 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# OMDROP_STAGE_ROOT exists only for the unit tests, which run unprivileged and
+# must not touch a developer's real upstream/ and build/ directories.
+STAGE_ROOT=${OMDROP_STAGE_ROOT:-$ROOT}
 UPSTREAM_REPO=https://github.com/brentkearney/omdrop-awdl.git
+# shellcheck disable=SC1091
 . "$ROOT/pins"
 UPSTREAM_COMMIT=$OMDROP_AWDL_COMMIT
-UP=$ROOT/upstream/omdrop-awdl
-LIB=$ROOT/build/lib
+UP=$STAGE_ROOT/upstream/omdrop-awdl
+LIB=$STAGE_ROOT/build/lib
 
 # Everything here talks to awdl0 through sockets or to BlueZ over D-Bus; none
 # of it touches the Broadcom firmware (that is omdrop-discoverable, awdl-up and
@@ -31,7 +35,7 @@ FROM_UPSTREAM=(
   awdl-mdns-respond.py  # answers mDNS queries for our identity on awdl0
 )
 
-OWL_BIN=$ROOT/upstream/owl/build/daemon/owl
+OWL_BIN=$STAGE_ROOT/upstream/owl/build/daemon/owl
 [ -x "$OWL_BIN" ] || { echo "no OWL build at $OWL_BIN; run tools/build-owl.sh first"; exit 1; }
 
 if [ ! -d "$UP/.git" ]; then
@@ -52,4 +56,4 @@ cp "$ROOT"/userspace/* "$LIB/"
 cp "$OWL_BIN" "$LIB/owl"
 chmod 755 "$LIB/send-to-peer" "$LIB/omdrop-discoverable" "$LIB/owl" "$LIB"/*.py
 
-echo "staged $LIB: ${#FROM_UPSTREAM[@]} files from omdrop-awdl@${UPSTREAM_COMMIT:0:7}, $(ls "$ROOT/userspace" | wc -l) of ours, and owl"
+echo "staged $LIB: ${#FROM_UPSTREAM[@]} files from omdrop-awdl@${UPSTREAM_COMMIT:0:7}, $(find "$ROOT/userspace" -maxdepth 1 -type f | wc -l) of ours, and owl"
