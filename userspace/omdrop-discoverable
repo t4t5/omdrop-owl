@@ -80,6 +80,8 @@ need_root() { [ "$(id -u)" = 0 ] || die "must run as root (through pkexec)" 2; }
 # The Wi-Fi station: $CONF/infra-iface, else the first managed interface.
 station_iface() {
   local forced d name
+  # During an exclusive window the original station may itself be IBSS.
+  if [ -r "$RUN/exclusive" ]; then cat "$RUN/exclusive"; return; fi
   forced=$(knob infra-iface)
   [ -n "$forced" ] && { echo "$forced"; return; }
   for d in /sys/class/net/*/phy80211; do
@@ -151,40 +153,70 @@ tx_channels() {  # PHY
 # back; $RUN/exclusive tells `stop` to give it back.
 # Prints the frequency the cell started on.
 exclusive_up() {  # STA PHY FREQ...
-  local sta=$1 phy=$2 f
+  local sta=$1 phy=$2 f cell=$IBSS
   shift 2
+  nmcli -g GENERAL.CON-UUID device show "$sta" > "$RUN/connection" 2>/dev/null || return 1
+  sysctl -n "net.ipv6.conf.$sta.disable_ipv6" > "$RUN/ipv6" || return 1
   echo "$sta" > "$RUN/exclusive"
-  nmcli device set "$sta" managed no >/dev/null 2>&1
-  ip link set "$sta" down
+  nmcli -w 10 device disconnect "$sta" >/dev/null 2>&1 || true
+  nmcli device set "$sta" managed no >/dev/null 2>&1 || return 1
+  ip link set "$sta" down || return 1
   iw dev "$IBSS" del 2>/dev/null
-  iw phy "$phy" interface add "$IBSS" type ibss || return 1
-  ip link set "$IBSS" address "$(cat "/sys/class/net/$sta/address")"
+  if iw phy "$phy" interface add "$IBSS" type ibss; then
+    ip link set "$IBSS" address "$(cat "/sys/class/net/$sta/address")" || return 1
+  else
+    # AX211 rejects a second IBSS vif while a managed vif exists. Reuse the
+    # disconnected station, recording the change before attempting it so a
+    # partial start still restores its type and IPv6 settings.
+    touch "$RUN/converted"
+    iw dev "$sta" set type ibss || return 1
+    cell=$sta
+  fi
   # IP runs on awdl0. Left alone, the kernel and avahi take this vif for a
   # network too and send plain IPv6 on AWDL's BSSID.
-  sysctl -qw "net.ipv6.conf.$IBSS.disable_ipv6=1" 2>/dev/null
-  ip link set "$IBSS" up || return 1
+  sysctl -qw "net.ipv6.conf.$cell.disable_ipv6=1" 2>/dev/null || return 1
+  ip link set "$cell" up || return 1
   for f in "$@"; do
-    iw dev "$IBSS" ibss join omdrop "$f" HT20 fixed-freq "$AWDL_BSSID" beacon-interval 10000 >&2 || continue
+    iw dev "$cell" ibss join omdrop "$f" HT20 fixed-freq "$AWDL_BSSID" beacon-interval 10000 >&2 || continue
     # mac80211 scans the channel once before it starts the cell.
     for _ in $(seq 40); do
-      iw dev "$IBSS" link 2>/dev/null | grep -q '^Joined IBSS' && { echo "$f"; return 0; }
+      iw dev "$cell" link 2>/dev/null | grep -q '^Joined IBSS' && { echo "$f"; return 0; }
       sleep 0.25
     done
-    iw dev "$IBSS" ibss leave 2>/dev/null
+    iw dev "$cell" ibss leave 2>/dev/null
   done
   return 1
 }
 
-# NetworkManager reconnects by itself once it has the station back.
+# Give the original connection back explicitly; autoconnect alone can leave
+# the converted AX211 unavailable until NetworkManager observes the type change.
 exclusive_down() {
-  local sta
-  iw dev "$IBSS" ibss leave 2>/dev/null
-  iw dev "$IBSS" del 2>/dev/null
+  local sta uuid ipv6 restored=0
   sta=$(cat "$RUN/exclusive" 2>/dev/null)
   [ -n "$sta" ] || return 0
-  ip link set "$sta" up 2>/dev/null
-  nmcli device set "$sta" managed yes >/dev/null 2>&1
-  rm -f "$RUN/exclusive"
+  if [ -e "$RUN/converted" ]; then
+    iw dev "$sta" ibss leave 2>/dev/null
+    ip link set "$sta" down 2>/dev/null || return 1
+    iw dev "$sta" set type managed || return 1
+    ipv6=$(cat "$RUN/ipv6")
+    sysctl -qw "net.ipv6.conf.$sta.disable_ipv6=$ipv6" || return 1
+  else
+    iw dev "$IBSS" ibss leave 2>/dev/null
+    iw dev "$IBSS" del 2>/dev/null
+  fi
+  ip link set "$sta" up 2>/dev/null || return 1
+  nmcli device set "$sta" managed yes >/dev/null 2>&1 || return 1
+  uuid=$(cat "$RUN/connection" 2>/dev/null)
+  if [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    for _ in $(seq 10); do
+      if nmcli -w 10 connection up uuid "$uuid" ifname "$sta" >/dev/null 2>&1; then
+        restored=1; break
+      fi
+      sleep 1
+    done
+    [ "$restored" = 1 ] || log "Wi-Fi restored to managed mode; connection $uuid did not reconnect"
+  fi
+  rm -f "$RUN/exclusive" "$RUN/converted" "$RUN/connection" "$RUN/ipv6"
 }
 
 # --------------------------------------------------------------------- status
@@ -284,7 +316,7 @@ cmd_stop() {
   pkill -f "^$OWL_BIN " 2>/dev/null
   ip link set "$MON" down 2>/dev/null
   iw dev "$MON" del 2>/dev/null
-  exclusive_down
+  exclusive_down || { log "could not restore station; retaining recovery state"; return 4; }
   sta=$(cat "$RUN/station" 2>/dev/null)
   pm=$(cat "$RUN/pm" 2>/dev/null)
   if [ -n "$sta" ] && [ -n "$pm" ]; then
@@ -348,6 +380,10 @@ cmd_start() {
     if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
     log "already discoverable; window now ${secs}s"
     exit 5
+  fi
+  # Recover a previous interrupted start before looking for a managed vif.
+  if [ -r "$RUN/exclusive" ]; then
+    cmd_stop interrupted-start >/dev/null || return 4
   fi
   : > "$RUN/log"
   : > "$RUN/announce.log"
