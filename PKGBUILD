@@ -3,7 +3,7 @@
 # Build from a checkout of this repository:  makepkg -si
 pkgname=omdrop-owl
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="AirDrop radio backend for omdrop on MediaTek MT7925 Wi-Fi: AWDL in userspace through OWL"
 arch=('x86_64' 'aarch64')
 url="https://github.com/t4t5/omdrop-owl"
@@ -62,6 +62,9 @@ build() {
 }
 
 check() {
+  cc -I owl/src "${startdir}/tests/test_awdl_padding.c" build/src/libawdl.a build/libradiotap.a \
+    -lm -o build/test_awdl_padding
+  build/test_awdl_padding
   case "$(build/daemon/owl -S intersect -R 12 -m 02:00:00:00:00:01 -h 2>&1 || true)" in
     *"invalid option"*|*"-R takes"*|*"-m takes"*) error "owl lacks -S, -R or -m: the patches did not apply"; return 1 ;;
   esac
