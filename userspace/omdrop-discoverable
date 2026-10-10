@@ -26,6 +26,10 @@
 # receiver binds to; omdrop-awdl's awdl-airdrop-adv.py announces _airdrop._tcp
 # on it (--plain: OWL adds the AWDL encapsulation itself).
 #
+# A card whose profile says "exclusive" can't do that (Intel). Its station
+# comes down for the window, and an ad-hoc vif on AWDL's own BSSID sits beside
+# the monitor vif on a channel the card may transmit on: see exclusive_up.
+#
 # ROOT: required. Callers come through pkexec, which drops the environment, so
 # everything lives at fixed paths: helpers beside this script (/usr/lib/omdrop
 # when packaged), state in $RUN, tunables in $CONF.
@@ -38,12 +42,21 @@ CONF=${OMDROP_CONF:-/etc/omdrop}
 OWL_LOG=$RUN/owl.log
 IF=awdl0
 MON=mon0
+IBSS=awdlibss0
+AWDL_BSSID=00:25:00:ff:94:73
 OWL_BIN=$LIB/owl
 PROFILES=$LIB/owl-profiles
 # Receiver capability flags in the announcement, as omdrop-awdl sends them:
 # 0x88 (OpenDrop's: SUPPORTS_MIXED_TYPES | SUPPORTS_DISCOVER_MAYBE) + SUPPORTS_URL.
 ADV_FLAGS=137
 ADV_INTERVAL=3
+# One round of announcements. Three copies do in shared mode, where OWL sends
+# them in AWDL's multicast slots and the phone is on our channel for those. In
+# exclusive mode it visits our channel for a slot or two in sixteen, and OWL
+# sends multicast as it comes (owl -F): a copy every 16 TU, one availability
+# window, for a whole period of sixteen slots.
+ADV_BURST="--count 3 --interval 0.05"
+ADV_BURST_EXCLUSIVE="--count 64 --interval 0.0164"
 VERSION=0.1.0
 # The omdrop-awdl helper contract this follows, which is also the version of
 # omdrop-awdl's tools staged beside it.
@@ -71,7 +84,7 @@ station_iface() {
   [ -n "$forced" ] && { echo "$forced"; return; }
   for d in /sys/class/net/*/phy80211; do
     name=$(basename "$(dirname "$d")")
-    [ "$name" = "$IF" ] || [ "$name" = "$MON" ] && continue
+    [ "$name" = "$IF" ] || [ "$name" = "$MON" ] || [ "$name" = "$IBSS" ] && continue
     iw dev "$name" info 2>/dev/null | grep -q 'type managed' || continue
     echo "$name"
     return
@@ -100,6 +113,79 @@ untested_hint() {
 }
 
 mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/class/net/$1/phy80211")")/mt76"; }
+
+# ------------------------------------------------------------- exclusive mode
+
+# AWDL's channels this card may transmit on, 5 GHz first: an iPhone gives
+# channel 6 a slot or two in sixteen and 44 or 149 several. One marked "No IR",
+# radar or disabled is receive-only. That a channel is allowed doesn't mean an
+# ad-hoc cell can start there: the AX201 refuses every 5 GHz one (EINVAL on
+# 149 under a GB regdomain, where 44 is "No IR" until it has an AP there), so
+# exclusive_up tries them in this order.
+tx_channels() {  # PHY
+  local ok c
+  ok=$(iw phy "$1" channels 2>/dev/null | awk '
+    /^[[:space:]]*\* [0-9]+ MHz/ { if (f && ok) print f; f = $2; ok = !/disabled/; next }
+    /No IR|Radar detection/ { ok = 0 }
+    END { if (f && ok) print f }')
+  for c in 5220 5745 2437; do
+    grep -qx "$c" <<< "$ok" && echo "$c"
+  done
+}
+
+# Take the station off the air and put an ad-hoc vif in its place. AWDL's
+# frames are IBSS frames with a fixed BSSID, so joining that "IBSS" gives the
+# firmware an address to ACK for and a BSSID filter that passes AWDL, and
+# mac80211 a station entry per peer: unicast is sent, retried and ACKed the
+# ordinary way. Injected frames carry this vif's MAC, which is how mac80211
+# picks the vif to send them through. A monitor vif alone on the AX201 never
+# sees an ACK, and spends 100 ms retrying every unicast frame.
+# The cell has to be HT. An iPhone sends its unicast at HT rates (MCS 7 at
+# 65 Mbit/s here), which a NOHT cell neither receives nor ACKs; the phone then
+# takes us for unreachable and doesn't try again until it restarts.
+# The cell beacons as rarely as it may (every 10000 TU). Its beacons carry
+# AWDL's BSSID, which no AWDL device beacons with, and an iPhone restarted
+# beside a cell beaconing every 100 TU didn't list us where one beside a cell
+# beaconing every 10 s did (once each).
+# NetworkManager has to let go of the station first, or it brings it straight
+# back; $RUN/exclusive tells `stop` to give it back.
+# Prints the frequency the cell started on.
+exclusive_up() {  # STA PHY FREQ...
+  local sta=$1 phy=$2 f
+  shift 2
+  echo "$sta" > "$RUN/exclusive"
+  nmcli device set "$sta" managed no >/dev/null 2>&1
+  ip link set "$sta" down
+  iw dev "$IBSS" del 2>/dev/null
+  iw phy "$phy" interface add "$IBSS" type ibss || return 1
+  ip link set "$IBSS" address "$(cat "/sys/class/net/$sta/address")"
+  # IP runs on awdl0. Left alone, the kernel and avahi take this vif for a
+  # network too and send plain IPv6 on AWDL's BSSID.
+  sysctl -qw "net.ipv6.conf.$IBSS.disable_ipv6=1" 2>/dev/null
+  ip link set "$IBSS" up || return 1
+  for f in "$@"; do
+    iw dev "$IBSS" ibss join omdrop "$f" HT20 fixed-freq "$AWDL_BSSID" beacon-interval 10000 >&2 || continue
+    # mac80211 scans the channel once before it starts the cell.
+    for _ in $(seq 40); do
+      iw dev "$IBSS" link 2>/dev/null | grep -q '^Joined IBSS' && { echo "$f"; return 0; }
+      sleep 0.25
+    done
+    iw dev "$IBSS" ibss leave 2>/dev/null
+  done
+  return 1
+}
+
+# NetworkManager reconnects by itself once it has the station back.
+exclusive_down() {
+  local sta
+  iw dev "$IBSS" ibss leave 2>/dev/null
+  iw dev "$IBSS" del 2>/dev/null
+  sta=$(cat "$RUN/exclusive" 2>/dev/null)
+  [ -n "$sta" ] || return 0
+  ip link set "$sta" up 2>/dev/null
+  nmcli device set "$sta" managed yes >/dev/null 2>&1
+  rm -f "$RUN/exclusive"
+}
 
 # --------------------------------------------------------------------- status
 
@@ -166,11 +252,11 @@ cmd_probe() {
     missing+=("hardware|$(untested_hint "$drv")")
   else
     [ -x "$OWL_BIN" ] || missing+=("backend|omdrop-owl is installed without OWL ($OWL_BIN). Reinstall omdrop-owl.")
-    [ "$PROF_MODE" = shared ] || missing+=("backend|This Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet.")
+    [ "$PROF_MODE" = shared ] || [ "$PROF_MODE" = exclusive ] || missing+=("backend|This Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet.")
     ap=$(iw dev "$sta" link 2>/dev/null | awk '/freq:/ {print int($2)}')
-    case "$ap" in
-      2437|5220|5745) ;;
-      "") missing+=("radio|Wi-Fi isn't connected, and AirDrop shares its channel. Connect to Wi-Fi first.") ;;
+    case "$PROF_MODE:$ap" in
+      exclusive:*|*:2437|*:5220|*:5745) ;;
+      *:) missing+=("radio|Wi-Fi isn't connected, and AirDrop shares its channel. Connect to Wi-Fi first.") ;;
       *) missing+=("radio|Your Wi-Fi network is on $ap MHz, but AirDrop can only share channel 6, 44 or 149 with it. Moving the router to one of those makes this work.") ;;
     esac
   fi
@@ -198,6 +284,7 @@ cmd_stop() {
   pkill -f "^$OWL_BIN " 2>/dev/null
   ip link set "$MON" down 2>/dev/null
   iw dev "$MON" del 2>/dev/null
+  exclusive_down
   sta=$(cat "$RUN/station" 2>/dev/null)
   pm=$(cat "$RUN/pm" 2>/dev/null)
   if [ -n "$sta" ] && [ -n "$pm" ]; then
@@ -229,7 +316,8 @@ cmd_stop() {
 
 # The background half of a window: announce, watch OWL, end at expiry.
 supervise() {
-  local until
+  local until burst=$ADV_BURST
+  [ -e "$RUN/exclusive" ] && burst=$ADV_BURST_EXCLUSIVE
   while true; do
     until=$(cat "$RUN/until" 2>/dev/null || echo 0)
     if [ "${until:-0}" -gt 0 ] && [ "$(date +%s)" -ge "$until" ]; then
@@ -241,14 +329,14 @@ supervise() {
       exec "$SELF" stop owl-exited
     fi
     python3 "$LIB/awdl-airdrop-adv.py" --iface "$IF" --plain --flags "$ADV_FLAGS" --port 8771 \
-      --count 3 --interval 0.05 >> "$RUN/announce.log" 2>&1
+      $burst >> "$RUN/announce.log" 2>&1
     sleep "$ADV_INTERVAL"
   done
 }
 
 cmd_start() {
-  local secs=${1:-} sta drv gw ap chan stamac monmac mt76 _
-  local owl_extra=()
+  local secs=${1:-} sta drv phy gw ap freqs chan stamac monmac mt76 _
+  local owl_extra=() strategy=intersect
   [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: omdrop-discoverable start <seconds>" 2
   need_root
   mkdir -p "$RUN"
@@ -272,17 +360,29 @@ cmd_start() {
   if [ "$PROF_STATUS" != tested ] && [ "$(knob allow-untested)" != 1 ]; then
     die "$(untested_hint "$drv")" 4
   fi
-  [ "$PROF_MODE" = shared ] || die "this Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet" 4
-  # Wi-Fi takes a few seconds after a driver reload to associate and get an
-  # address; don't judge a link that's still coming up.
-  for _ in $(seq 15); do
-    gw=$(ip -4 route show default dev "$sta" 2>/dev/null | awk '{print $3; exit}')
-    [ -n "$gw" ] && ping -c1 -W1 -I "$sta" "$gw" >/dev/null 2>&1 && break
-    gw=""
-    sleep 1
-  done
-  [ -n "$gw" ] || die "Wi-Fi isn't connected (or isn't passing traffic), and AirDrop shares its channel. Connect to Wi-Fi and try again." 3
-  ap=$(iw dev "$sta" link | awk '/freq:/ {print int($2)}')
+  [ "$PROF_MODE" = shared ] || [ "$PROF_MODE" = exclusive ] || die "this Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet" 4
+  phy=$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")
+  if [ "$PROF_MODE" = exclusive ]; then
+    gw=none
+    freqs=$(tx_channels "$phy")
+    [ -n "$freqs" ] || die "this Wi-Fi card may not transmit on any of AirDrop's channels (6, 44, 149) here" 4
+    # From here a failure has to give Wi-Fi back, which is cmd_stop's job.
+    if ! ap=$(exclusive_up "$sta" "$phy" $freqs); then
+      cmd_stop start-failed >/dev/null
+      die "could not start the ad-hoc interface $IBSS on any of AirDrop's channels" 4
+    fi
+  else
+    # Wi-Fi takes a few seconds after a driver reload to associate and get an
+    # address; don't judge a link that's still coming up.
+    for _ in $(seq 15); do
+      gw=$(ip -4 route show default dev "$sta" 2>/dev/null | awk '{print $3; exit}')
+      [ -n "$gw" ] && ping -c1 -W1 -I "$sta" "$gw" >/dev/null 2>&1 && break
+      gw=""
+      sleep 1
+    done
+    [ -n "$gw" ] || die "Wi-Fi isn't connected (or isn't passing traffic), and AirDrop shares its channel. Connect to Wi-Fi and try again." 3
+    ap=$(iw dev "$sta" link | awk '/freq:/ {print int($2)}')
+  fi
   case "$ap" in
     2437) chan=6 ;; 5220) chan=44 ;; 5745) chan=149 ;;
     *) die "your Wi-Fi network is on ${ap:-an unknown} MHz, but AirDrop can only share channel 6, 44 or 149 with it. Moving the router to one of those makes this work." 3 ;;
@@ -293,8 +393,10 @@ cmd_start() {
   log "station $sta ($stamac, $drv) on ch$chan, gateway $gw; profile: mode=$PROF_MODE mon_mac=$PROF_MONMAC reconnect=$PROF_RECONNECT mt76_pm=$PROF_PM"
 
   iw dev "$MON" del 2>/dev/null
-  iw phy "$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")" interface add "$MON" type monitor \
-    || die "could not create the monitor interface $MON" 4
+  if ! iw phy "$phy" interface add "$MON" type monitor; then
+    cmd_stop start-failed >/dev/null
+    die "could not create the monitor interface $MON" 4
+  fi
   # mon_mac: the station's MAC on the monitor interface, or one of its own
   # (locally administered, derived from the station's) with OWL told the
   # station's through -m.
@@ -305,7 +407,19 @@ cmd_start() {
     monmac=$stamac
   fi
   ip link set "$MON" address "$monmac"
-  ip link set "$MON" up || die "could not bring $MON up" 4
+  if ! ip link set "$MON" up; then
+    cmd_stop start-failed >/dev/null
+    die "could not bring $MON up" 4
+  fi
+  # owl -F, -E: patches/owl-03-fixed-radio.patch, owl-04-election-metric.patch.
+  # -S pin advertises our one channel in all sixteen slots, which with -F is
+  # where we are (patches/owl-06-fixed-radio-pin.patch), rather than only the
+  # slots the phone already gives it: those move while the phone makes room
+  # for us, and the intersection trails them by a tick.
+  if [ "$PROF_MODE" = exclusive ]; then
+    owl_extra+=(-F -E)
+    strategy=pin
+  fi
 
   # mt76_pm: runtime PM off for the window, restored by stop.
   mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
@@ -319,7 +433,7 @@ cmd_start() {
   if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
   # 9>&-: children must not inherit the lock, or the long-lived ones would hold
   # it for the whole window and the next `stop` would wait forever.
-  setsid "$OWL_BIN" -i "$MON" -c "$chan" -N -S intersect "${owl_extra[@]}" -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
+  setsid "$OWL_BIN" -i "$MON" -c "$chan" -N -S "$strategy" "${owl_extra[@]}" -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
   echo $! > "$RUN/owl.pid"
   for _ in $(seq 20); do ip link show "$IF" >/dev/null 2>&1 && break; sleep 0.5; done
   if ! ip link show "$IF" >/dev/null 2>&1; then

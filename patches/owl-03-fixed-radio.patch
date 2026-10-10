@@ -1,0 +1,181 @@
+diff --git a/daemon/core.c b/daemon/core.c
+index bb8bdb9..47311c6 100644
+--- a/daemon/core.c
++++ b/daemon/core.c
+@@ -251,7 +251,11 @@ void awdl_send_multicast(struct ev_loop *loop, ev_timer *timer, int revents) {
+ 	double in = 0;
+ 
+ 	if (!circular_buf_empty(state->tx_queue_multicast)) { /* we have something to send */
+-		in = awdl_can_send_in(awdl_state, now, AWDL_MULTICAST_GUARD_TU);
++		/* The multicast guard keeps clear of the slot's first and last AW, for
++		 * peers still arriving on the channel. With -F the first AW may be all
++		 * a peer spends on ours, so only the unicast guard applies. */
++		int guard = awdl_state->channel.fixed_radio ? AWDL_UNICAST_GUARD_TU : AWDL_MULTICAST_GUARD_TU;
++		in = awdl_can_send_in(awdl_state, now, guard);
+ 		if (awdl_is_multicast_eaw(awdl_state, now) && (in == 0)) { /* we can send now */
+ 			void *next;
+ 			circular_buf_get(state->tx_queue_multicast, &next, 0);
+@@ -262,7 +266,7 @@ void awdl_send_multicast(struct ev_loop *loop, ev_timer *timer, int revents) {
+ 			if (in == 0) /* try again next EAW */
+ 				in = usec_to_sec(ieee80211_tu_to_usec(64));
+ 			else if (in < 0) /* we are at the end of slot but within guard */
+-				in = -in + usec_to_sec(ieee80211_tu_to_usec(AWDL_MULTICAST_GUARD_TU));
++				in = -in + usec_to_sec(ieee80211_tu_to_usec(guard));
+ 		}
+ 	}
+ 
+@@ -515,6 +519,42 @@ static void awdl_adopt_chanseq(struct daemon_state *state) {
+ 			uint8_t ours = awdl_chan_num(awdl->channel.master, AWDL_CHAN_ENC_OPCLASS);
+ 			int kept = awdl_chanseq_intersect(seq, src->sequence, src->sequence_enc, ours);
+ 
++			if (awdl->channel.fixed_radio) {
++				/* -F: we are on our channel in every slot, so the honest sequence
++				 * has every slot in which any peer is there, not only the
++				 * master's. It matters because a peer sends to us only in slots
++				 * that both sequences give to the channel, and the peer sending
++				 * is rarely the master: an iPhone mid-transfer advertised
++				 *   149 x8, 6,6,149,6,6,6,149,149
++				 * while its master, an idle iPad, had channel 6 in slots 0 and 8.
++				 * Following the iPad: 27 kB/s. Following the phone: 150 kB/s.
++				 * Bytes are still only ever copied from a peer's own sequence, and
++				 * only from peers whose slots line up with ours: a peer from
++				 * another cluster means a different slot by the same index. */
++				struct awdl_peer *p;
++				awdl_peers_it_t it = awdl_peers_it_new(awdl->peers.peers);
++
++				while (awdl_peers_it_next(it, &p) == PEERS_OK) {
++					int64_t off_tu;
++
++					if (p == src || !p->is_valid || !p->has_sequence || !p->has_sync_offset ||
++					    p->sequence_enc != src->sequence_enc)
++						continue;
++					/* phase difference, within one period of 16 slots of 64 TU */
++					off_tu = ((p->sync_offset / 1024) % 1024 + 1024 + 512) % 1024 - 512;
++					if (off_tu > 16 || off_tu < -16)
++						continue;
++					for (int i = 0; i < AWDL_CHANSEQ_LENGTH; i++) {
++						if (!awdl_chan_num(seq[i], src->sequence_enc) &&
++						    awdl_chan_num(p->sequence[i], p->sequence_enc) == ours) {
++							seq[i] = p->sequence[i];
++							kept++;
++						}
++					}
++				}
++				awdl_peers_it_free(it);
++			}
++
+ 			if (!kept) {
+ 				/* No overlap at all this tick. Keep whatever we last advertised
+ 				 * rather than announcing an all-empty sequence, which says "never
+diff --git a/daemon/owl.c b/daemon/owl.c
+index 7ad5f45..db14aec 100644
+--- a/daemon/owl.c
++++ b/daemon/owl.c
+@@ -91,6 +91,7 @@ int main(int argc, char *argv[]) {
+ 	struct awdl_chan chan;
+ 	int log_level = LOG_INFO;
+ 	int filter_rssi = 1;
++	int fixed_radio = 0;
+ 	int no_monitor_mode = 0;
+ 	enum awdl_chanseq_strategy strategy = AWDL_CHANSEQ_VERBATIM;
+ 	int widen_max = 4;
+@@ -104,7 +105,7 @@ int main(int argc, char *argv[]) {
+ 
+ 	struct daemon_state state;
+ 
+-	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:")) != -1) {
++	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:F")) != -1) {
+ 		switch (c) {
+ 			case 'm': {
+ 				/* Our AWDL address, instead of the monitor interface's MAC. On
+@@ -181,6 +182,12 @@ int main(int argc, char *argv[]) {
+ 			case 'h':
+ 				strcpy(host, optarg);
+ 				break;
++			case 'F':
++				/* The radio stays on -c's channel and that channel wasn't chosen
++				 * to suit the peers: send multicast in any slot, and unicast in
++				 * every slot the peer is on our channel. */
++				fixed_radio = 1;
++				break;
+ 			case 'N':
+ 				no_monitor_mode = 1;
+ 				break;
+@@ -266,6 +273,9 @@ int main(int argc, char *argv[]) {
+ 	state.awdl_state.filter_rssi = filter_rssi;
+ 	state.awdl_state.channel.strategy = strategy;
+ 	state.awdl_state.channel.widen_max = widen_max;
++	state.awdl_state.channel.fixed_radio = fixed_radio;
++	if (fixed_radio)
++		log_info("fixed radio: multicast in any slot, unicast whenever the peer is on our channel");
+ 	log_info("channel sequence strategy: %s",
+ 	         strategy == AWDL_CHANSEQ_PIN ? "pin" :
+ 	         strategy == AWDL_CHANSEQ_ROTATE ? "rotate" :
+diff --git a/src/channel.h b/src/channel.h
+index de86666..e49fc16 100644
+--- a/src/channel.h
++++ b/src/channel.h
+@@ -136,6 +136,11 @@ struct awdl_channel_state {
+ 	uint8_t rot_valid;
+ 	/* WIDEN: how many of the peer's empty slots to fill. */
+ 	int widen_max;
++	/* owl -F: the radio is held on the -c channel by something we can't move
++	 * (an ad-hoc vif's channel context, or a card that may transmit nowhere
++	 * else) and nobody chose that channel to suit the peers. See
++	 * awdl_same_channel_as_peer() and awdl_is_multicast_eaw(). */
++	uint8_t fixed_radio;
+ };
+ 
+ void awdl_chanseq_init(struct awdl_chan *seq);
+diff --git a/src/schedule.c b/src/schedule.c
+index c6246b0..6589baa 100644
+--- a/src/schedule.c
++++ b/src/schedule.c
+@@ -55,7 +55,14 @@ bool awdl_same_channel_as_peer(const struct awdl_state *state, uint64_t now, con
+ 	            ? awdl_sync_current_eaw(awdl_peer_time(now, peer), &state->sync) % AWDL_CHANSEQ_LENGTH
+ 	            : own_slot;
+ 
+-	own_chan = awdl_chan_num(state->channel.sequence[own_slot], state->channel.enc);
++	/* With -F that channel is where we are in every slot, not only in the
++	 * slots we advertise. Those are the sync master's; a peer that offers our
++	 * channel in more slots than the master does (an iPhone adds some once it
++	 * sees we are only ever there) can be sent to in all of them. */
++	if (state->channel.fixed_radio)
++		own_chan = awdl_chan_num(state->channel.master, AWDL_CHAN_ENC_OPCLASS);
++	else
++		own_chan = awdl_chan_num(state->channel.sequence[own_slot], state->channel.enc);
+ 	/* The peer's sequence must be decoded with the encoding it ARRIVED in, not
+ 	 * with ours. They are different fields for a reason: the raw TLV bytes are
+ 	 * stored verbatim, and {chan_num, opclass} read as {flags, chan_num} yields
+@@ -92,6 +99,19 @@ bool awdl_same_channel_as_peer(const struct awdl_state *state, uint64_t now, con
+ 
+ int awdl_is_multicast_eaw(const struct awdl_state *state, uint64_t now) {
+ 	uint16_t slot = awdl_sync_current_eaw(now, &state->sync) % AWDL_CHANSEQ_LENGTH;
++
++	/* Slots 0 and 10 are where Apple devices send multicast, each on whatever
++	 * channel its sequence has there, and for a channel nobody favours that is
++	 * never ours: an iPhone advertising
++	 *   149,149,149,0,0,0,0,0,6,149,149,0,0,0,0,0
++	 * is on channel 6 in slot 8 alone, and did not hear a radio fixed there
++	 * until it moved slot 0 to channel 6 a minute later. Nor can we tell from
++	 * here in which slots, or for how much of one, a peer really listens on a
++	 * channel it only visits. So with -F multicast goes out as it comes, and
++	 * whoever wants it heard repeats it across a whole period of 16 slots, as
++	 * omdrop-owl's announcer does. */
++	if (state->channel.fixed_radio)
++		return 1;
+ 	return slot == 0 || slot == 10;
+ }
+ 
+diff --git a/src/state.c b/src/state.c
+index 39426c6..7bfddb5 100644
+--- a/src/state.c
++++ b/src/state.c
+@@ -66,6 +66,7 @@ void awdl_init_state(struct awdl_state *state, const char *hostname, const struc
+ 	state->channel.rot_delta_pending = 0;
+ 	state->channel.rot_valid = 0;
+ 	state->channel.widen_max = 4;
++	state->channel.fixed_radio = 0;
+ 
+ 	awdl_election_state_init(&state->election, self);
+ 

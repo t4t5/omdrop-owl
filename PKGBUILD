@@ -62,8 +62,8 @@ build() {
 }
 
 check() {
-  case "$(build/daemon/owl -S intersect -R 12 -m 02:00:00:00:00:01 -h 2>&1 || true)" in
-    *"invalid option"*|*"-R takes"*|*"-m takes"*) error "owl lacks -S, -R or -m: the patches did not apply"; return 1 ;;
+  case "$(build/daemon/owl -S intersect -R 12 -m 02:00:00:00:00:01 -F -E -h 2>&1 || true)" in
+    *"invalid option"*|*"-R takes"*|*"-m takes"*) error "owl lacks -S, -R, -m, -F or -E: the patches did not apply"; return 1 ;;
   esac
 }
 
