@@ -49,8 +49,8 @@ What omdrop-owl does on each Wi-Fi driver comes from
 
 | Driver | Card | Status |
 |---|---|---|
-| `mt7925e` | MediaTek MT7925 (Framework 13) | Tested: both directions, Wi-Fi stays connected |
-| `iwlwifi` | Intel AX200, AX211 | Doesn't work: drops injected frames while connected, and its firmware won't ACK in monitor mode ([#1](https://github.com/t4t5/omdrop-owl/issues/1), [#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
+| `mt7925e` | MediaTek MT7925 (Framework 13) | ✅ Tested: both directions, Wi-Fi stays connected |
+| `iwlwifi` | Intel AX200, AX211 | ❌ Doesn't work: drops injected frames while connected, and its firmware won't ACK in monitor mode ([#1](https://github.com/t4t5/omdrop-owl/issues/1), [#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
 
 Any other card falls back to the table's `*` line, which only runs once you
 opt in with `echo 1 | sudo tee /etc/omdrop/allow-untested`.
