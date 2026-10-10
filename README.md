@@ -82,6 +82,8 @@ around it varies, which is what the profile records.
 3. Try it: turn omdrop on, send a photo from an iPhone, send one back, and turn
    it off. Then watch Wi-Fi for five minutes (`ping` your router): if it stops
    receiving after omdrop turns off, keep `reconnect yes`.
+   `sudo tools/test-card.sh` does this step and writes a report directory to
+   attach.
 4. If something fails, try the other `mon_mac` setting. Report what you saw
    either way.
 5. Open a pull request adding your line to `userspace/owl-profiles`, with
