@@ -70,11 +70,26 @@ gaps() {
              printf "%d %d %d\n", tx, rx, max }' "$1"
 }
 
-OPEN=0 PINGER= WATCHER=
+# omdrop's receiver runs as the user who ran sudo, and only `omdrop on` sets it
+# up (identity, TLS), so it runs as them once the window is open. Its own
+# radio call then finds the window open (exit 5) and leaves it to us.
+UHOME=$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)
+as_user() {
+  sudo -H -u "$SUDO_USER" env PATH="$UHOME/.local/bin:$PATH" XDG_RUNTIME_DIR="/run/user/$SUDO_UID" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$SUDO_UID/bus" "$@"
+}
+OMDROP=
+[ -n "${SUDO_USER:-}" ] && OMDROP=$(as_user sh -c 'command -v omdrop')
+
+OPEN=0 RECEIVING=0 PINGER= WATCHER=
+# Our stop first, so the teardown under test is this helper's, not the one
+# omdrop calls; `omdrop off` then only stops the receiver.
+receiver_off() { [ "$RECEIVING" = 1 ] && as_user omdrop off >/dev/null 2>&1; RECEIVING=0; }
 cleanup() {
   [ -n "$PINGER" ] && kill -INT "$PINGER" 2>/dev/null
   [ -n "$WATCHER" ] && kill "$WATCHER" 2>/dev/null
   if [ "$OPEN" = 1 ]; then echo; echo "closing the window"; "$H" stop >/dev/null 2>&1; OPEN=0; fi
+  receiver_off
 }
 collect() {
   cp "$RUN"/log "$OUT/helper.log" 2>/dev/null
@@ -142,6 +157,12 @@ PINGER=$!
 while sleep 2; do echo "$(date +%T) $("$H" status --json)"; done > "$OUT/status.log" 2>&1 &
 WATCHER=$!
 
+if [ -n "$OMDROP" ]; then
+  step "Start omdrop's receiver"
+  if as_user omdrop on forever; then RECEIVING=1; result receiver started
+  else result receiver "omdrop on failed"; fi
+fi
+
 step "Find the phone"
 cat <<'EOF'
 On the iPhone: Control Center > AirDrop > Everyone for 10 Minutes. Then open
@@ -163,14 +184,14 @@ else
 fi
 
 # The phone lists this computer only once something answers its /Discover,
-# which is omdrop's receiver: without omdrop, neither question can pass.
-if command -v omdrop >/dev/null; then
+# which is omdrop's receiver: without it, neither question can pass.
+if [ "$RECEIVING" = 1 ]; then
   a=$(ask "Does this computer show up in the iPhone's AirDrop share sheet?")
   result "shown on the phone" "$(yn "$a")"
   a=$(ask "Send a photo from the iPhone to this computer. Did it arrive?")
   result "phone -> computer" "$(yn "$a")"
 else
-  result "phone -> computer" "skipped (omdrop isn't installed, so nothing receives)"
+  result "phone -> computer" "skipped (omdrop's receiver isn't running for ${SUDO_USER:-root})"
 fi
 
 if [ -n "$peers" ]; then
@@ -203,6 +224,7 @@ t0=$(date +%s%N)
 rc=$?
 OPEN=0
 result stop "exit $rc in $(( ($(date +%s%N) - t0) / 1000000 )) ms"
+receiver_off
 
 step "Watch Wi-Fi for $WATCH s after teardown (Ctrl-C ends the watch early)"
 # In the background, so Ctrl-C ends only the ping and its summary still lands.
