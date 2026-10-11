@@ -54,7 +54,7 @@ What omdrop-owl does on each Wi-Fi driver comes from
 | Driver | Card | Status |
 |---|---|---|
 | `mt7925e` | MediaTek MT7925 (Framework 13) | ✅ Tested: both directions, Wi-Fi stays connected |
-| `iwlwifi` | Intel AX201 | ✅ Tested: both directions on Ubuntu 24.04 (kernel 6.8), Wi-Fi is off while visible ([exclusive mode](#exclusive-mode)) |
+| `iwlwifi` | Intel AX201 | ✅ Tested: both directions on Ubuntu 24.04 (kernel 6.8) and CachyOS (kernel 7.2.9), Wi-Fi is off while visible ([exclusive mode](#exclusive-mode)) |
 | `iwlwifi` | Intel AX200 | ❓ Untested in exclusive mode. Shared mode doesn't work: the driver drops injected frames while connected ([#1](https://github.com/t4t5/omdrop-owl/issues/1)) |
 | `iwlwifi` | Intel AX211 | ❓ Untested in exclusive mode. Shared mode doesn't work, monitor mode never ACKs, and an ad-hoc interface beside a connected station crashed its firmware ([#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
 
