@@ -210,8 +210,9 @@ EOF
   t0=$(date +%s)
   "$LIB/send-to-peer" --wait 60 "$FILE"
   rc=$?
+  took=$(( $(date +%s) - t0 ))
   a=$(ask "Did it arrive on the iPhone?")
-  result "computer -> phone" "$(yn "$a") (send-to-peer exit $rc, $(( $(date +%s) - t0 )) s)"
+  result "computer -> phone" "$(yn "$a") (send-to-peer exit $rc, $took s)"
 fi
 
 step "Stop"

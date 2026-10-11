@@ -19,5 +19,5 @@
 #
 # driver   status    mode    mon_mac  reconnect  mt76_pm  notes
 mt7925e    tested    shared  station  yes        yes      MediaTek MT7925 (Framework 13). Injects while associated, sending from the station's MAC; the station ACKs the phone's unicast. Without a reconnect, the station stops receiving 3-165 s after a monitor interface is deleted.
-iwlwifi    tested    exclusive  station  no       no       Intel AX201, kernel 6.8. Associated, the firmware passes up no AWDL frames. Starts no ad-hoc cell on 5 GHz, so runs on channel 6: a 2.4 MB photo from an iPhone in 17 s, to it in 10.5 s. The AX200 and AX211 are untested.
+iwlwifi    tested    exclusive  station  no       no       Intel AX201, kernels 6.8 and 7.2.9. Associated, the firmware passes up no AWDL frames. Starts no ad-hoc cell on 5 GHz, so runs on channel 6: a 2.4 MB photo from an iPhone in 17 s, to it in 10.5 s. The AX200 and AX211 are untested.
 *          untested  shared  station  yes        no       Any other card. Needs monitor-mode injection while associated, and an AP on channel 6, 44 or 149.
