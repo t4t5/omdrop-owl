@@ -7,8 +7,8 @@ machines without Apple's Broadcom Wi-Fi. AWDL runs in userspace through
 [OWL](https://github.com/jedbillyb/owl) on a monitor interface, and omdrop's own
 receiver and sender run over it unchanged. First target: the MediaTek MT7925
 (`mt7925e`), as in the Framework 13, where AirDrop works in both directions
-while Wi-Fi stays connected. An Intel AX201 works in an "exclusive" mode that
-takes Wi-Fi away while the machine is visible.
+while Wi-Fi stays connected. Intel AX201 and AX211 cards work in an
+"exclusive" mode that takes Wi-Fi away while the machine is visible.
 
 It is a sibling of [omdrop-awdl](https://github.com/brentkearney/omdrop-awdl),
 the Broadcom radio package, and plugs into omdrop the same way: helpers in
@@ -56,10 +56,10 @@ What omdrop-owl does on each Wi-Fi driver comes from
 | `mt7925e` | MediaTek MT7925 (Framework 13) | ✅ Tested: both directions, Wi-Fi stays connected |
 | `iwlwifi` | Intel AX201 | ✅ Tested: both directions on Ubuntu 24.04 (kernel 6.8) and CachyOS (kernel 7.2.9), Wi-Fi is off while visible ([exclusive mode](#exclusive-mode)) |
 | `iwlwifi` | Intel AX200 | ❓ Untested in exclusive mode. Shared mode doesn't work: the driver drops injected frames while connected ([#1](https://github.com/t4t5/omdrop-owl/issues/1)) |
-| `iwlwifi` | Intel AX211 | ❓ Untested in exclusive mode. Shared mode doesn't work, monitor mode never ACKs, and an ad-hoc interface beside a connected station crashed its firmware ([#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
+| `iwlwifi` | Intel AX211 | ✅ Tested: both directions on Ubuntu 26.04 (kernel 7.0), Wi-Fi is off while visible ([exclusive mode](#exclusive-mode)). Shared mode doesn't work ([#4](https://github.com/t4t5/omdrop-owl/issues/4)) |
 
 The profile is per driver, so the `iwlwifi` line covers every Intel card: the
-AX200 and AX211 run in exclusive mode too, without the opt-in below.
+AX200 runs in exclusive mode too, without the opt-in below.
 
 Any other card falls back to the table's `*` line, which only runs once you
 opt in with `echo 1 | sudo tee /etc/omdrop/allow-untested`.
