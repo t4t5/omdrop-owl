@@ -120,10 +120,13 @@ this one, building the release tagged `v<pkgver>` instead of the checkout.
 request.
 
 To release, bump `pkgver` in `PKGBUILD` and `VERSION` in
-`userspace/omdrop-discoverable` together, or only `pkgrel` for a packaging fix.
-When that reaches `main`, [the release workflow](.github/workflows/release.yml)
-builds the package, tags `v<pkgver>` with a GitHub release, and publishes the
-AUR's `PKGBUILD`.
+`userspace/omdrop-discoverable` together. When that reaches `main`,
+[the release workflow](.github/workflows/release.yml) builds the package, tags
+`v<pkgver>` with a GitHub release, and publishes the AUR's `PKGBUILD`.
+
+A fix to `PKGBUILD` alone, such as a missing dependency, can bump only `pkgrel`
+instead. Everything else the package installs comes from the tagged release,
+so the workflow refuses a `pkgrel` bump that changes any of it.
 
 ## How it works
 
