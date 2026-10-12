@@ -14,6 +14,9 @@ trap 'rm -rf "$WORK"' EXIT
 
 "$ROOT/tools/aur-pkgbuild.sh" "$WORK"
 # A commit of the working tree when there are changes; nothing when clean.
+# stash create fails quietly on stale stat info (CI's chown leaves it so), so
+# refresh the index first.
+git -C "$ROOT" update-index -q --refresh || true
 TREE=$(git -C "$ROOT" stash create)
 git -C "$ROOT" archive --prefix="omdrop-owl-$VERSION/" \
   -o "$WORK/omdrop-owl-$VERSION.tar.gz" "${TREE:-HEAD}"
