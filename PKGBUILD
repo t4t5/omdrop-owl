@@ -1,3 +1,5 @@
+# Maintainer: T4T5 <t4t5@hey.com>
+
 # omdrop-owl: the radio half of omdrop on Wi-Fi cards without Apple's Broadcom
 # firmware, through OWL.
 #
