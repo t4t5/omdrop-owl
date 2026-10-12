@@ -7,17 +7,16 @@ post_install() {
       || echo "  Could not reload NetworkManager's configuration. Run: sudo nmcli general reload conf"
   fi
   cat <<'MSG'
-  omdrop-owl is omdrop's radio half for MediaTek MT7925 Wi-Fi. Nothing runs
-  until omdrop asks. The interface is the omdrop plugin, in a version that
-  supports radio backends (docs/radio-backend.md):
+  omdrop-owl is omdrop's radio half for Wi-Fi cards without Apple's Broadcom
+  firmware. Nothing runs until omdrop asks. The interface is the omdrop
+  plugin, 0.16.0 or newer:
 
-      omarchy plugin add <omdrop plugin repository>
-      omarchy plugin enable netmojo.omdrop
+      omarchy plugin add https://github.com/brentkearney/omdrop-plugin.git
 
   Then turn omdrop on from its icon in the bar.
 
-  Your Wi-Fi access point has to be on channel 6, 44 or 149: AirDrop shares
-  its channel. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
+  In shared mode, your Wi-Fi access point has to be on channel 6, 44 or 149:
+  AirDrop shares its channel. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
   anything, is in the way.
 MSG
 }

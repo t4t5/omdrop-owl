@@ -11,12 +11,11 @@ if [ "$1" = configure ]; then
   fi
   cat <<'MSG'
   omdrop-owl is omdrop's radio half for Wi-Fi cards without Apple's Broadcom
-  firmware. Nothing runs until omdrop asks. Install omdrop itself, in a
-  version that supports radio backends (docs/radio-backend.md), and turn it
-  on from there.
+  firmware. Nothing runs until omdrop asks. Install omdrop itself, 0.16.0 or
+  newer, and turn it on from there.
 
-  Your Wi-Fi access point has to be on channel 6, 44 or 149: AirDrop shares
-  its channel. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
+  In shared mode, your Wi-Fi access point has to be on channel 6, 44 or 149:
+  AirDrop shares its channel. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
   anything, is in the way.
 MSG
 fi

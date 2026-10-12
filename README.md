@@ -76,13 +76,14 @@ Wi-Fi away for the window.
 
 ## Install
 
-On Arch:
+Install omdrop-owl first, then omdrop. On Arch, Omarchy included, it's in the
+[AUR](https://aur.archlinux.org/packages/omdrop-owl):
 
 ```sh
-makepkg -si
+yay -S omdrop-owl
 ```
 
-On Debian or Ubuntu:
+On Debian or Ubuntu, from a checkout of this repository:
 
 ```sh
 sudo apt install build-essential cmake git pkg-config dpkg-dev \
@@ -97,13 +98,28 @@ and installs it root-owned into `/usr/lib/omdrop` together with
 helper, and a NetworkManager rule keeping `awdl0`, `mon0` and `awdlibss0`
 unmanaged. It conflicts with `brcmfmac-awdl-dkms`: one radio backend at a time.
 
-Then install omdrop itself, a version with radio-backend support (not merged
-yet: [brentkearney/omdrop-plugin#25](https://github.com/brentkearney/omdrop-plugin/pull/25)),
+Then install omdrop 0.16.0 or newer, the first with radio-backend support. On
+Omarchy:
+
+```sh
+omarchy plugin add https://github.com/brentkearney/omdrop-plugin.git
+```
+
 and turn it on from the bar. `/usr/lib/omdrop/omdrop-discoverable probe` says
 what, if anything, is in the way.
 
-For development: `just build` assembles the same files in `build/lib`, and
-`just test` runs the card test against them.
+## Development
+
+`just build` assembles the same files in `build/lib`, and `just test` runs the
+card test against them. `just install` builds and installs the pacman package
+from the checkout: `PKGBUILD` on its own builds the tagged release, as the AUR
+does.
+
+To release, bump `pkgver` in `PKGBUILD` and `VERSION` in
+`userspace/omdrop-discoverable` together, or only `pkgrel` for a packaging fix.
+When that reaches `main`, [the release workflow](.github/workflows/release.yml)
+builds the package, tags `v<pkgver>` with a GitHub release, and publishes the
+`PKGBUILD` to the AUR.
 
 ## How it works
 

@@ -1,0 +1,86 @@
+# Releases a new version in PKGBUILD once it reaches main: builds the package,
+# tags v<pkgver> with a GitHub release (if that tag is new: a pkgrel bump
+# reuses it), and publishes PKGBUILD to the AUR. A version the AUR already has
+# does nothing. After a failure, rerun it, or run it from the Actions tab.
+#
+# Needs the secret AUR_SSH_KEY: a private key whose public half is on the AUR
+# account that maintains omdrop-owl.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [PKGBUILD]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git github-cli jq openssh pacman-contrib
+
+      - uses: actions/checkout@v4
+
+      - name: Compare with the AUR
+        id: version
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          pkgver=$(sed -n 's/^pkgver=//p' PKGBUILD)
+          version=$pkgver-$(sed -n 's/^pkgrel=//p' PKGBUILD)
+          aur=$(curl -fsS https://aur.archlinux.org/rpc/v5/info/omdrop-owl \
+            | jq -r '.results[0].Version // "none"')
+          echo "PKGBUILD: $version, AUR: $aur"
+          if [ "$version" = "$aur" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Fail before tagging anything that couldn't then be published.
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "::error::The AUR_SSH_KEY secret isn't set."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$pkgver" > /dev/null; then
+            tagged=true
+          else
+            tagged=false
+          fi
+          { echo "release=true"; echo "pkgver=$pkgver"; echo "tagged=$tagged"; } >> "$GITHUB_OUTPUT"
+
+      # makepkg won't run as root.
+      - name: Build the package
+        if: steps.version.outputs.release == 'true'
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          sudo -u builder tools/makepkg-checkout.sh -s --noconfirm
+
+      - name: Tag the release
+        if: steps.version.outputs.release == 'true' && steps.version.outputs.tagged == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PKGVER: ${{ steps.version.outputs.pkgver }}
+        run: gh release create "v$PKGVER" --target "$GITHUB_SHA" --title "$PKGVER" --generate-notes
+
+      - name: Publish to the AUR
+        if: steps.version.outputs.release == 'true'
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          install -d -m700 -o builder /home/builder/.ssh
+          (umask 077; printf '%s\n' "$AUR_SSH_KEY" > /home/builder/.ssh/aur)
+          chown builder /home/builder/.ssh/aur
+          sudo -u builder git config --global user.name 'github-actions[bot]'
+          sudo -u builder git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          sudo -u builder tools/aur-publish.sh /home/builder/.ssh/aur

@@ -10,6 +10,8 @@
 /src/
 /pkg/
 /*.pkg.tar.*
+# tools/makepkg-checkout.sh's stand-in for the release tarball.
+/omdrop-owl-*.tar.gz
 /*.deb
 __pycache__
 

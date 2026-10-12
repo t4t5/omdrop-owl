@@ -9,9 +9,9 @@ build:
     tools/build-owl.sh
     tools/stage.sh
 
-# Build and install the pacman package
+# Build and install the pacman package from this checkout
 install:
-    makepkg -si
+    tools/makepkg-checkout.sh -si
 
 # Test this computer's card against build/lib and write a report (README, "Adding your card")
 test *ARGS: build
