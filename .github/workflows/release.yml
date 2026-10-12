@@ -1,7 +1,8 @@
-# Releases a new version in PKGBUILD once it reaches main: builds the package,
-# tags v<pkgver> with a GitHub release (if that tag is new: a pkgrel bump
-# reuses it), and publishes PKGBUILD to the AUR. A version the AUR already has
-# does nothing. After a failure, rerun it, or run it from the Actions tab.
+# Releases a new version in PKGBUILD once it reaches main: builds the AUR's
+# PKGBUILD (tools/aur-pkgbuild.sh), tags v<pkgver> with a GitHub release (if
+# that tag is new: a pkgrel bump reuses it), and publishes it to the AUR. A
+# version the AUR already has does nothing. After a failure, rerun it, or run
+# it from the Actions tab.
 #
 # Needs the secret AUR_SSH_KEY: a private key whose public half is on the AUR
 # account that maintains omdrop-owl.
@@ -21,6 +22,8 @@ permissions:
 
 jobs:
   release:
+    # Not in forks, which have no AUR key.
+    if: github.repository == 't4t5/omdrop-owl'
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     steps:
@@ -63,7 +66,7 @@ jobs:
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
           chown -R builder "$GITHUB_WORKSPACE"
-          sudo -u builder tools/makepkg-checkout.sh -s --noconfirm
+          sudo -u builder tools/test-aur-pkgbuild.sh -s --noconfirm
 
       - name: Tag the release
         if: steps.version.outputs.release == 'true' && steps.version.outputs.tagged == 'false'

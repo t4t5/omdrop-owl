@@ -11,7 +11,11 @@ build:
 
 # Build and install the pacman package from this checkout
 install:
-    tools/makepkg-checkout.sh -si
+    makepkg -si
+
+# Build the AUR's PKGBUILD against this checkout, as CI does for pull requests
+test-aur:
+    tools/test-aur-pkgbuild.sh
 
 # Test this computer's card against build/lib and write a report (README, "Adding your card")
 test *ARGS: build

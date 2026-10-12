@@ -111,15 +111,19 @@ what, if anything, is in the way.
 ## Development
 
 `just build` assembles the same files in `build/lib`, and `just test` runs the
-card test against them. `just install` builds and installs the pacman package
-from the checkout: `PKGBUILD` on its own builds the tagged release, as the AUR
-does.
+card test against them. On Arch, `makepkg -si` (or `just install`) builds and
+installs the pacman package from the checkout.
+
+The AUR's `PKGBUILD` isn't kept here: `tools/aur-pkgbuild.sh` derives it from
+this one, building the release tagged `v<pkgver>` instead of the checkout.
+`just test-aur` builds it against the checkout, as CI does for every pull
+request.
 
 To release, bump `pkgver` in `PKGBUILD` and `VERSION` in
 `userspace/omdrop-discoverable` together, or only `pkgrel` for a packaging fix.
 When that reaches `main`, [the release workflow](.github/workflows/release.yml)
 builds the package, tags `v<pkgver>` with a GitHub release, and publishes the
-`PKGBUILD` to the AUR.
+AUR's `PKGBUILD`.
 
 ## How it works
 

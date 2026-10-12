@@ -3,10 +3,11 @@
 # omdrop-owl: the radio half of omdrop on Wi-Fi cards without Apple's Broadcom
 # firmware, through OWL.
 #
-# This is also the AUR package, so it builds the release tagged v${pkgver}, not
-# the files beside it. To build a checkout instead: tools/makepkg-checkout.sh -si
-# Bumping pkgver or pkgrel on main tags the release and publishes this file to
-# the AUR (.github/workflows/release.yml).
+# Build this checkout:  makepkg -si
+#
+# tools/aur-pkgbuild.sh derives the AUR's PKGBUILD from this one, building the
+# release tagged v${pkgver} instead of the files beside it. Bumping pkgver or
+# pkgrel on main publishes it (.github/workflows/release.yml).
 pkgname=omdrop-owl
 pkgver=0.1.0
 pkgrel=1
@@ -28,14 +29,11 @@ install="${pkgname}.install"
 # Keep in step with ./pins (prepare() checks).
 _owl_commit=832d70f815c3d4a06a02117bf0fc5e868daa1ff0
 _omdrop_awdl_commit=534f91a525337951ca19c311e53d333bd6d55100
-source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz"
-        "owl::git+https://github.com/jedbillyb/owl.git#commit=${_owl_commit}"
+source=("owl::git+https://github.com/jedbillyb/owl.git#commit=${_owl_commit}"
         "googletest::git+https://github.com/google/googletest.git"
         "radiotap::git+https://github.com/radiotap/radiotap-library.git"
         "omdrop-awdl::git+https://github.com/brentkearney/omdrop-awdl.git#commit=${_omdrop_awdl_commit}")
-# The release tarball can't hold its own checksum: the release workflow fills
-# it in for the AUR.
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 # omdrop-awdl's radio-independent tools, installed unmodified beside our
 # helper: send-to-peer finds the helper, the sender and the BLE advertiser
@@ -44,7 +42,7 @@ _from_omdrop_awdl=(send-to-peer airdrop-send.py awdl-af-parse.py awdl_identity.p
                    awdl_debug.py ble-airdrop-adv.py awdl-airdrop-adv.py awdl-mdns-respond.py)
 
 prepare() {
-  local tree="${srcdir}/${pkgname}-${pkgver}"
+  local tree="${startdir}"
   . "${tree}/pins"
   [[ "$OWL_COMMIT" == "$_owl_commit" && "$OMDROP_AWDL_COMMIT" == "$_omdrop_awdl_commit" ]] \
     || { error "PKGBUILD's pinned commits differ from ./pins"; return 1; }
@@ -80,7 +78,7 @@ check() {
 }
 
 package() {
-  local tree="${srcdir}/${pkgname}-${pkgver}" lib="${pkgdir}/usr/lib/omdrop" f
+  local tree="${startdir}" lib="${pkgdir}/usr/lib/omdrop" f
   install -Dm755 "${tree}/userspace/omdrop-discoverable" "${lib}/omdrop-discoverable"
   install -Dm644 "${tree}/userspace/owl-profiles" "${lib}/owl-profiles"
   install -Dm755 build/daemon/owl "${lib}/owl"
