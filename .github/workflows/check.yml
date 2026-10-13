@@ -1,0 +1,24 @@
+# Builds the AUR's PKGBUILD (tools/aur-pkgbuild.sh) against each pull request,
+# so a change that would break the next release fails here instead.
+name: Check
+
+on:
+  pull_request:
+
+jobs:
+  aur-package:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git
+
+      - uses: actions/checkout@v4
+
+      # makepkg won't run as root.
+      - name: Build the AUR package
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          sudo -u builder tools/test-aur-pkgbuild.sh -s --noconfirm

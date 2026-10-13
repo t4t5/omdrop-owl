@@ -9,6 +9,22 @@
 #   owl-01-tx-rate.patch    -R RATE: data-frame PHY rate (default unchanged)
 #   owl-02-awdl-addr.patch  -m MAC: the AWDL address, instead of the monitor
 #                           interface's own
+#   owl-03-fixed-radio.patch  -F: for a radio that can't leave -c's channel,
+#                           multicast in any slot, unicast in every slot the
+#                           peer is on that channel, and advertise every slot
+#                           any peer is on it
+#   owl-04-election-metric.patch  -E: elect the sync master by metric before
+#                           counter, as Apple devices do
+#   owl-05-fixed-radio-noack.patch  with -F, unicast data goes out once, with
+#                           no ACK expected and so no retries
+#   owl-06-fixed-radio-pin.patch  with -F, -S pin pins -c's channel, not the
+#                           peer's favourite
+#   owl-08-amsdu-bound.patch  refuse an A-MSDU with more subframes than the
+#                           receive array has slots, instead of writing past
+#                           it (tests/owl_amsdu.c)
+#   owl-09-action-zero-padding.patch  accept the zero padding iPhones end
+#                           some MIFs with, instead of refusing the frame and
+#                           so never validating the peer (tests/owl_padding.c)
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 
@@ -17,7 +33,8 @@ DIR=$ROOT/upstream/owl
 OWL_REPO=https://github.com/jedbillyb/owl.git
 . "$ROOT/pins"
 
-[ -f /usr/include/ev.h ] || { echo "libev headers missing (Arch: sudo pacman -S libev; Debian, Ubuntu: sudo apt install libev-dev)"; exit 1; }
+# Asked of the compiler, not /usr/include: Nix keeps headers elsewhere.
+echo '#include <ev.h>' | "${CC:-cc}" -E -x c - >/dev/null 2>&1 || { echo "libev headers missing (Arch: sudo pacman -S libev; Debian, Ubuntu: sudo apt install libev-dev)"; exit 1; }
 
 if [ ! -d "$DIR/.git" ]; then
   git clone -q --recurse-submodules "$OWL_REPO" "$DIR"
@@ -37,7 +54,7 @@ cmake -S "$DIR" -B "$DIR/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSIO
 cmake --build "$DIR/build" --target owl -j"$(nproc)" >/dev/null
 
 BIN=$DIR/build/daemon/owl
-case "$("$BIN" -S intersect -R 12 -m 02:00:00:00:00:01 -h 2>&1 || true)" in
-  *"invalid option"*|*"-R takes"*|*"-m takes"*) echo "$BIN lacks -S, -R or -m; did the patches apply?"; exit 1 ;;
+case "$("$BIN" -S intersect -R 12 -m 02:00:00:00:00:01 -F -E -h 2>&1 || true)" in
+  *"invalid option"*|*"-R takes"*|*"-m takes"*) echo "$BIN lacks -S, -R, -m, -F or -E; did the patches apply?"; exit 1 ;;
 esac
 echo "built $BIN: owl@${OWL_COMMIT:0:7} + $(ls "$ROOT"/patches/owl-*.patch | wc -l) patches"

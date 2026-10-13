@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats and shellcheck
+        run: sudo apt-get update && sudo apt-get install -y bats shellcheck
+      - name: shellcheck
+        # test-card.sh isn't listed: it declares empty variables as `A= B=`
+        # (SC1007). --severity=warning skips info-level notes the helper
+        # relies on intentionally (word-splitting an argument string and a
+        # list).
+        run: |
+          shellcheck --severity=warning \
+            userspace/omdrop-discoverable \
+            tools/build-owl.sh tools/stage.sh tools/build-rpm.sh tools/build-deb.sh tools/check-rpm.sh tools/run-tests.sh \
+            tests/helpers.bash
+      - name: Unit tests
+        run: tools/run-tests.sh
+
+  rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the build toolchain
+        run: dnf install -y rpm-build rpmlint git gcc gcc-c++ cmake make libev-devel libpcap-devel libnl3-devel python3 libasan
+      - name: Build the rpm
+        run: tools/build-rpm.sh
+      - name: Check the rpm against the PKGBUILD
+        run: tools/check-rpm.sh omdrop-owl-*.rpm
+      - name: OWL patch tests
+        # Here, not in the test job: it needs the OWL tree build-rpm.sh just
+        # patched, and a skip would hide that it didn't run.
+        run: |
+          python3 -m unittest -v tests/test_owl_amsdu.py tests/test_owl_padding.py 2> owl.log || { cat owl.log; exit 1; }
+          cat owl.log
+          ! grep -q skipped owl.log
+      - name: rpmlint (informational)
+        run: rpmlint omdrop-owl-*.rpm || true

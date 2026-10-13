@@ -2,12 +2,14 @@
 # Test omdrop-owl on this computer's Wi-Fi card: the steps of README, "Adding
 # your card", with a report directory to attach to the pull request or issue.
 #
-#   sudo tools/test-card.sh [--lib DIR] [--watch SECONDS] [--file FILE]
+#   sudo tools/test-card.sh [--lib DIR] [--watch SECONDS] [--file FILE] [--phone NAME|MAC]
 #
 #   --lib     the helpers to test: default /usr/lib/omdrop when installed,
 #             else build/lib (tools/build-owl.sh and tools/stage.sh)
 #   --watch   how long to watch Wi-Fi after teardown (default 300)
 #   --file    what to send to the phone (default: a generated test image)
+#   --phone   the iPhone's AirDrop name or MAC, when other AirDrop devices are
+#             nearby (default: asked for, from the names that answer)
 #
 # It runs probe, opens a window, waits for the phone, sends it a file, closes
 # the window and then watches the station for the drop the MT7925 shows
@@ -15,13 +17,14 @@
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-LIB= WATCH=300 FILE=
+LIB= WATCH=300 FILE= PHONE=
 while [ $# -gt 0 ]; do
   case "$1" in
     --lib) LIB=$2; shift 2 ;;
     --watch) WATCH=$2; shift 2 ;;
     --file) FILE=$2; shift 2 ;;
-    *) sed -n '2,15s/^# \{0,1\}//p' "$0"; exit 2 ;;
+    --phone) PHONE=$2; shift 2 ;;
+    *) sed -n '2,/^set /s/^# \{0,1\}//p' "$0"; exit 2 ;;
   esac
 done
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo $0 $*"; exit 2; }
@@ -132,11 +135,36 @@ fi
 [ "$P" = ready ] || { result probe "not ready"; exit 1; }
 result probe ready
 
+# NetworkManager has to leave OWL's interfaces alone, which the package's
+# packaging/99-omdrop-owl-unmanaged.conf sees to and a source build doesn't.
+# Managing them, it has kept the phone from ever being heard, and crashed
+# iwlwifi's firmware a second into the window (#23).
+if command -v NetworkManager >/dev/null && [ "$(nmcli -t -f RUNNING general 2>/dev/null)" = running ]; then
+  step "NetworkManager"
+  unmanaged=$(NetworkManager --print-config 2>/dev/null | sed -n 's/^unmanaged-devices=//p' | tr ';,' '\n\n')
+  managed=()
+  for n in awdl0 mon0 awdlibss0; do
+    grep -qx "interface-name:$n" <<< "$unmanaged" || managed+=("$n")
+  done
+  if [ ${#managed[@]} -eq 0 ]; then
+    result NetworkManager "leaves awdl0, mon0 and awdlibss0 alone"
+  else
+    result NetworkManager "would manage ${managed[*]}"
+    cat <<EOF
+NetworkManager isn't told to leave ${managed[*]} alone, and the test is
+unlikely to pass while it manages them. To tell it:
+  sudo cp $ROOT/packaging/99-omdrop-owl-unmanaged.conf /etc/NetworkManager/conf.d/
+  sudo nmcli general reload conf
+EOF
+    [ "$(ask "Go on anyway?")" = y ] || exit 1
+  fi
+fi
+
 GW=$(ip -4 route show default dev "$STA" | awk '{print $3; exit}')
 [ -n "$GW" ] || { result wifi "no default route on $STA"; exit 1; }
 
 step "Baseline: ping $GW for 10 s"
-ping -O -i 1 -c 10 -W 1 -I "$STA" "$GW" > "$OUT/ping-baseline.log" 2>&1
+LC_ALL=C ping -O -i 1 -c 10 -W 1 -I "$STA" "$GW" > "$OUT/ping-baseline.log" 2>&1
 read -r tx rx gap <<< "$(gaps "$OUT/ping-baseline.log")"
 result baseline "$rx/$tx replies"
 
@@ -152,7 +180,7 @@ if [ "$rc" != 0 ]; then
 fi
 result start "ok in ${dt} ms"
 ip -br link show dev awdl0; ip -br link show dev mon0
-ping -D -O -i 1 -W 1 -I "$STA" "$GW" > "$OUT/ping-window.log" 2>&1 &
+LC_ALL=C ping -D -O -i 1 -W 1 -I "$STA" "$GW" > "$OUT/ping-window.log" 2>&1 &
 PINGER=$!
 while sleep 2; do echo "$(date +%T) $("$H" status --json)"; done > "$OUT/status.log" 2>&1 &
 WATCHER=$!
@@ -207,11 +235,23 @@ EOF
   fi
   step "Send $(basename "$FILE") to the phone"
   echo "Accept it on the iPhone when asked."
-  t0=$(date +%s)
-  "$LIB/send-to-peer" --wait 60 "$FILE"
-  rc=$?
-  a=$(ask "Did it arrive on the iPhone?")
-  result "computer -> phone" "$(yn "$a") (send-to-peer exit $rc, $(( $(date +%s) - t0 )) s)"
+  # Several AirDrop devices nearby make send-to-peer refuse to pick one, so
+  # name the phone: from --phone, or from the names that answer now.
+  if [ -z "$PHONE" ]; then
+    echo "Devices answering now (name or MAC):"
+    "$LIB/send-to-peer" --list --names 2>&1 | sed 's/^/  /'
+    read -rp "Which one is the iPhone? (name or MAC, empty to skip the send) " PHONE < /dev/tty
+  fi
+  if [ -z "$PHONE" ]; then
+    result "computer -> phone" "skipped (no phone named)"
+  else
+    t0=$(date +%s)
+    "$LIB/send-to-peer" --wait 60 --mac "$PHONE" "$FILE"
+    rc=$?
+    took=$(( $(date +%s) - t0 ))
+    a=$(ask "Did it arrive on the iPhone?")
+    result "computer -> phone" "$(yn "$a") (send-to-peer exit $rc, $took s)"
+  fi
 fi
 
 step "Stop"
@@ -228,7 +268,7 @@ receiver_off
 
 step "Watch Wi-Fi for $WATCH s after teardown (Ctrl-C ends the watch early)"
 # In the background, so Ctrl-C ends only the ping and its summary still lands.
-ping -D -O -i 1 -W 1 -c "$WATCH" -I "$STA" "$GW" > "$OUT/ping-after.log" 2>&1 &
+LC_ALL=C ping -D -O -i 1 -W 1 -c "$WATCH" -I "$STA" "$GW" > "$OUT/ping-after.log" 2>&1 &
 PINGER=$!
 trap 'kill -INT "$PINGER" 2>/dev/null' INT
 while kill -0 "$PINGER" 2>/dev/null; do

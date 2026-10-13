@@ -1,10 +1,17 @@
-# omdrop-owl: the radio half of omdrop on MediaTek MT7925 Wi-Fi, through OWL.
+# Maintainer: T4T5 <t4t5@hey.com>
+
+# omdrop-owl: the radio half of omdrop on Wi-Fi cards without Apple's Broadcom
+# firmware, through OWL.
 #
-# Build from a checkout of this repository:  makepkg -si
+# Build this checkout:  makepkg -si
+#
+# tools/aur-pkgbuild.sh derives the AUR's PKGBUILD from this one, building the
+# release tagged v${pkgver} instead of the files beside it. Bumping pkgver or
+# pkgrel on main publishes it (.github/workflows/release.yml).
 pkgname=omdrop-owl
 pkgver=0.1.0
-pkgrel=2
-pkgdesc="AirDrop radio backend for omdrop on MediaTek MT7925 Wi-Fi: AWDL in userspace through OWL"
+pkgrel=1
+pkgdesc="AirDrop radio backend for omdrop on non-Broadcom Wi-Fi: AWDL in userspace through OWL"
 arch=('x86_64' 'aarch64')
 url="https://github.com/t4t5/omdrop-owl"
 # OWL (and our patches to it) GPL-3.0-or-later; its bundled radiotap parser
@@ -35,9 +42,12 @@ _from_omdrop_awdl=(send-to-peer airdrop-send.py awdl-af-parse.py awdl_identity.p
                    awdl_debug.py ble-airdrop-adv.py awdl-airdrop-adv.py awdl-mdns-respond.py)
 
 prepare() {
-  . "${startdir}/pins"
+  local tree="${startdir}"
+  . "${tree}/pins"
   [[ "$OWL_COMMIT" == "$_owl_commit" && "$OMDROP_AWDL_COMMIT" == "$_omdrop_awdl_commit" ]] \
     || { error "PKGBUILD's pinned commits differ from ./pins"; return 1; }
+  grep -qx "VERSION=${pkgver}" "${tree}/userspace/omdrop-discoverable" \
+    || { error "pkgver differs from VERSION in userspace/omdrop-discoverable"; return 1; }
 
   # OWL's submodules, at the commits it records, from the clones makepkg made.
   cd "${srcdir}/owl"
@@ -47,7 +57,7 @@ prepare() {
   git -c protocol.file.allow=always submodule update
 
   local p
-  for p in "${startdir}"/patches/owl-*.patch; do
+  for p in "${tree}"/patches/owl-*.patch; do
     msg2 "applying ${p##*/}"
     git apply "$p"
   done
@@ -62,27 +72,24 @@ build() {
 }
 
 check() {
-  cc -I owl/src "${startdir}/tests/test_awdl_padding.c" build/src/libawdl.a build/libradiotap.a \
-    -lm -o build/test_awdl_padding
-  build/test_awdl_padding
-  case "$(build/daemon/owl -S intersect -R 12 -m 02:00:00:00:00:01 -h 2>&1 || true)" in
-    *"invalid option"*|*"-R takes"*|*"-m takes"*) error "owl lacks -S, -R or -m: the patches did not apply"; return 1 ;;
+  case "$(build/daemon/owl -S intersect -R 12 -m 02:00:00:00:00:01 -F -E -h 2>&1 || true)" in
+    *"invalid option"*|*"-R takes"*|*"-m takes"*) error "owl lacks -S, -R, -m, -F or -E: the patches did not apply"; return 1 ;;
   esac
 }
 
 package() {
-  local lib="${pkgdir}/usr/lib/omdrop" f
-  install -Dm755 "${startdir}/userspace/omdrop-discoverable" "${lib}/omdrop-discoverable"
-  install -Dm644 "${startdir}/userspace/owl-profiles" "${lib}/owl-profiles"
+  local tree="${startdir}" lib="${pkgdir}/usr/lib/omdrop" f
+  install -Dm755 "${tree}/userspace/omdrop-discoverable" "${lib}/omdrop-discoverable"
+  install -Dm644 "${tree}/userspace/owl-profiles" "${lib}/owl-profiles"
   install -Dm755 build/daemon/owl "${lib}/owl"
   for f in "${_from_omdrop_awdl[@]}"; do
     install -Dm755 "omdrop-awdl/userspace/${f}" "${lib}/${f}"
   done
-  install -Dm644 "${startdir}/packaging/omdrop-owl.policy" \
+  install -Dm644 "${tree}/packaging/omdrop-owl.policy" \
     "${pkgdir}/usr/share/polkit-1/actions/io.github.t4t5.omdrop-owl.policy"
-  install -Dm644 "${startdir}/packaging/99-omdrop-owl-unmanaged.conf" \
+  install -Dm644 "${tree}/packaging/99-omdrop-owl-unmanaged.conf" \
     "${pkgdir}/usr/lib/NetworkManager/conf.d/99-omdrop-owl-unmanaged.conf"
-  install -Dm644 "${startdir}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -Dm644 "${tree}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
   install -Dm644 owl/COPYING "${pkgdir}/usr/share/licenses/${pkgname}/OWL-GPL-3.0"
   install -Dm644 omdrop-awdl/LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/omdrop-awdl-LICENSE"
   install -Dm644 owl/radiotap/COPYING "${pkgdir}/usr/share/licenses/${pkgname}/radiotap-ISC"

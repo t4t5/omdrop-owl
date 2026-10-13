@@ -1,0 +1,57 @@
+diff --git a/src/tx.c b/src/tx.c
+index 3abdc59..46a4cf3 100644
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -342,7 +342,15 @@ int ieee80211_init_radiotap_header(uint8_t *buf) {
+ 	return ieee80211_init_radiotap_header_rate(buf, &legacy_12);
+ }
+ 
++static int init_radiotap_header(uint8_t *buf, const struct ieee80211_tx_rate *rate, int noack);
++
+ int ieee80211_init_radiotap_header_rate(uint8_t *buf, const struct ieee80211_tx_rate *rate) {
++	return init_radiotap_header(buf, rate, 0);
++}
++
++/* noack sets IEEE80211_RADIOTAP_F_TX_NOACK: the firmware sends the frame once
++ * and never retries it. See awdl_init_full_data_frame(). */
++static int init_radiotap_header(uint8_t *buf, const struct ieee80211_tx_rate *rate, int noack) {
+ 	/*
+ 	 * TX radiotap headers and mac80211
+ 	 * https://www.kernel.org/doc/Documentation/networking/mac80211-injection.txt
+@@ -361,7 +369,20 @@ int ieee80211_init_radiotap_header_rate(uint8_t *buf, const struct ieee80211_tx_
+ 	if (rate->mcs < 0) {
+ 		present |= ieee80211_radiotap_type_to_mask(IEEE80211_RADIOTAP_RATE);
+ 		*ptr++ = (uint8_t) ieee80211_radiotap_rate_to_val(rate->legacy);
++		if (noack) {
++			/* TX_FLAGS (bit 15) is a u16, 2-byte aligned: pad after RATE */
++			*ptr++ = 0;
++			present |= ieee80211_radiotap_type_to_mask(IEEE80211_RADIOTAP_TX_FLAGS);
++			*ptr++ = IEEE80211_RADIOTAP_F_TX_NOACK & 0xff;
++			*ptr++ = IEEE80211_RADIOTAP_F_TX_NOACK >> 8;
++		}
+ 	} else {
++		if (noack) {
++			/* TX_FLAGS (bit 15) comes before MCS (bit 19), at an aligned offset */
++			present |= ieee80211_radiotap_type_to_mask(IEEE80211_RADIOTAP_TX_FLAGS);
++			*ptr++ = IEEE80211_RADIOTAP_F_TX_NOACK & 0xff;
++			*ptr++ = IEEE80211_RADIOTAP_F_TX_NOACK >> 8;
++		}
+ 		/* known, flags, mcs; byte-aligned, so no padding needed after RATE-less header */
+ 		present |= ieee80211_radiotap_type_to_mask(IEEE80211_RADIOTAP_MCS);
+ 		*ptr++ = IEEE80211_RADIOTAP_MCS_HAVE_BW | IEEE80211_RADIOTAP_MCS_HAVE_MCS | IEEE80211_RADIOTAP_MCS_HAVE_GI;
+@@ -446,7 +467,14 @@ int awdl_init_full_data_frame(uint8_t *buf, const struct ether_addr *src, const
+                               struct awdl_state *state, struct ieee80211_state *ieee80211_state) {
+ 	uint8_t *ptr = buf;
+ 
+-	ptr += ieee80211_init_radiotap_header_rate(ptr, &awdl_data_tx_rate);
++	/* -F: a peer visits our channel for a slot or two, and on the AX201 a unicast
++	 * frame that misses the visit is retried 15 times over 75-140 ms, holding up
++	 * every frame queued behind it until the peer has long gone; a transfer then
++	 * stalls on "Waiting". Sent once, without an ACK, a lost frame costs a TCP
++	 * retransmission instead. Multicast is never ACKed anyway. */
++	int noack = state->channel.fixed_radio && !(dst->ether_addr_octet[0] & 1);
++
++	ptr += init_radiotap_header(ptr, &awdl_data_tx_rate, noack);
+ 	ptr += ieee80211_init_awdl_data_hdr(ptr, src, dst, ieee80211_state);
+ 	ptr += llc_init_awdl_hdr(ptr);
+ 	ptr += awdl_init_data(ptr, state);

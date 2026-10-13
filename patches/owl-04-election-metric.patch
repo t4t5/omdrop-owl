@@ -1,0 +1,101 @@
+diff --git a/daemon/owl.c b/daemon/owl.c
+index db14aec..d65cd29 100644
+--- a/daemon/owl.c
++++ b/daemon/owl.c
+@@ -92,6 +92,7 @@ int main(int argc, char *argv[]) {
+ 	int log_level = LOG_INFO;
+ 	int filter_rssi = 1;
+ 	int fixed_radio = 0;
++	int metric_first = 0;
+ 	int no_monitor_mode = 0;
+ 	enum awdl_chanseq_strategy strategy = AWDL_CHANSEQ_VERBATIM;
+ 	int widen_max = 4;
+@@ -105,7 +106,7 @@ int main(int argc, char *argv[]) {
+ 
+ 	struct daemon_state state;
+ 
+-	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:F")) != -1) {
++	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:FE")) != -1) {
+ 		switch (c) {
+ 			case 'm': {
+ 				/* Our AWDL address, instead of the monitor interface's MAC. On
+@@ -182,6 +183,11 @@ int main(int argc, char *argv[]) {
+ 			case 'h':
+ 				strcpy(host, optarg);
+ 				break;
++			case 'E':
++				/* Elect the sync master the way Apple devices do: by metric
++				 * first, then counter (see awdl_election_compare_master). */
++				metric_first = 1;
++				break;
+ 			case 'F':
+ 				/* The radio stays on -c's channel and that channel wasn't chosen
+ 				 * to suit the peers: send multicast in any slot, and unicast in
+@@ -274,6 +280,9 @@ int main(int argc, char *argv[]) {
+ 	state.awdl_state.channel.strategy = strategy;
+ 	state.awdl_state.channel.widen_max = widen_max;
+ 	state.awdl_state.channel.fixed_radio = fixed_radio;
++	state.awdl_state.election.metric_first = metric_first;
++	if (metric_first)
++		log_info("election: by metric, then counter");
+ 	if (fixed_radio)
+ 		log_info("fixed radio: multicast in any slot, unicast whenever the peer is on our channel");
+ 	log_info("channel sequence strategy: %s",
+diff --git a/src/election.c b/src/election.c
+index 0ef4a43..f1ad031 100644
+--- a/src/election.c
++++ b/src/election.c
+@@ -53,12 +53,28 @@ void awdl_election_state_init(struct awdl_election_state *state, const struct et
+ 	state->master_addr = *self;
+ 	state->sync_addr = *self;
+ 	state->self_addr = *self;
++	state->metric_first = 0;
+ 	awdl_election_reset_metric(state);
+ 	awdl_election_reset_self(state);
+ }
+ 
+-static int awdl_election_compare_master(const struct awdl_election_state *a, const struct awdl_election_state *b) {
+-	int result = compare(a->master_counter, b->master_counter);
++/* Upstream ranks masters by counter, then metric. Apple devices rank by metric:
++ * in a capture of a dozen of them (2026-10), a master with metric 510
++ * and counter 3214 gave way to one with 522 and 393, and an iPhone left that
++ * same master for itself the moment its own metric went from 65 to 518 at
++ * counter 367. Ranking by counter kept us under the old master, in a sync tree
++ * the iPhone had left, and it never sent us a frame. With -E, metric first. */
++static int awdl_election_compare_master(const struct awdl_election_state *a, const struct awdl_election_state *b,
++                                        int metric_first) {
++	int result;
++
++	if (metric_first) {
++		result = compare(a->master_metric, b->master_metric);
++		if (!result)
++			result = compare(a->master_counter, b->master_counter);
++		return result;
++	}
++	result = compare(a->master_counter, b->master_counter);
+ 	if (!result)
+ 		result = compare(a->master_metric, b->master_metric);
+ 	return result;
+@@ -86,7 +102,7 @@ void awdl_election_run(struct awdl_election_state *state, const struct awdl_peer
+ 		}
+ 		if (awdl_election_is_sync_master(peer_state, &state->self_addr))
+ 			continue; /* reject: do not allow cycles in sync tree */
+-		cmp_metric = awdl_election_compare_master(peer_state, master_state);
++		cmp_metric = awdl_election_compare_master(peer_state, master_state, state->metric_first);
+ 		if (cmp_metric < 0) {
+ 			continue; /* reject: lower top master metric */
+ 		} else if (cmp_metric == 0) {
+diff --git a/src/election.h b/src/election.h
+index a15e0ca..8cb9eef 100644
+--- a/src/election.h
++++ b/src/election.h
+@@ -37,6 +37,9 @@ struct awdl_election_state {
+ 	uint32_t self_metric;
+ 	uint32_t master_counter;
+ 	uint32_t self_counter;
++	/* owl -E, in our own state only: rank masters by metric before counter.
++	 * See awdl_election_compare_master(). */
++	uint8_t metric_first;
+ };
+ 
+ int awdl_election_is_sync_master(const struct awdl_election_state *state, const struct ether_addr *addr);

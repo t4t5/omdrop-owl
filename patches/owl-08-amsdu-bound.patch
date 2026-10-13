@@ -1,0 +1,127 @@
+diff --git i/daemon/core.c w/daemon/core.c
+index 5e2b15f..214c80d 100644
+--- i/daemon/core.c
++++ w/daemon/core.c
+@@ -117,13 +117,15 @@ void awdl_receive_frame(uint8_t *user, const struct pcap_pkthdr *hdr, const uint
+ 	const struct buf *frame = buf_new_const(buf, hdr->caplen);
+ 	struct buf *data_arr[MAX_NUM_AMPDU];
+ 	struct buf **data = &data_arr[0];
+-	result = awdl_rx(frame, &data, &state->awdl_state);
+-	if (result == RX_OK) {
+-		for (struct buf **data_start = &data_arr[0]; data_start < data; data_start++) {
++	result = awdl_rx(frame, &data, &data_arr[MAX_NUM_AMPDU], &state->awdl_state);
++	/* An A-MSDU that fails part way has converted the subframes before the
++	 * failure: free those too, unsent. */
++	for (struct buf **data_start = &data_arr[0]; data_start < data; data_start++) {
++		if (result == RX_OK)
+ 			host_send(&state->io, buf_data(*data_start), buf_len(*data_start));
+-			buf_free(*data_start);
+-		}
+-	} else if (result < RX_OK) {
++		buf_free(*data_start);
++	}
++	if (result < RX_OK) {
+ 		log_warn("unhandled frame (%d)", result);
+ 		dump_frame(state->dump, hdr, buf);
+ 		state->awdl_state.stats.rx_unknown++;
+diff --git i/src/rx.c w/src/rx.c
+index a15f343..3e6af09 100644
+--- i/src/rx.c
++++ w/src/rx.c
+@@ -366,7 +366,7 @@ int awdl_valid_llc_header(const struct buf *frame) {
+ 	return 1;
+ }
+ 
+-int awdl_rx_data(const struct buf *frame, struct buf ***out, const struct ether_addr *src,
++int awdl_rx_data(const struct buf *frame, struct buf ***out, struct buf **out_end, const struct ether_addr *src,
+                  const struct ether_addr *dst, struct awdl_state *state) {
+ 	uint16_t ether_type;
+ 	int offset = 0;
+@@ -398,6 +398,11 @@ int awdl_rx_data(const struct buf *frame, struct buf ***out, const struct ether_
+ 	read_be16(frame, 6, &ether_type);
+ 	buf_strip(frame, sizeof(struct awdl_data));
+ 
++	/* An A-MSDU can carry any number of subframes: never write past the end
++	 * of the caller's array, which is on its stack. */
++	if (*out >= out_end)
++		return RX_TOO_MANY_FRAMES;
++
+ 	**out = buf_new_owned(ETHER_MAX_LEN);
+ 
+ 	/* TODO use checked write methods */
+@@ -412,7 +417,7 @@ int awdl_rx_data(const struct buf *frame, struct buf ***out, const struct ether_
+ 	return RX_OK;
+ }
+ 
+-int awdl_rx_data_amsdu(const struct buf *frame, struct buf ***out, const struct ether_addr *src __attribute__((unused)),
++int awdl_rx_data_amsdu(const struct buf *frame, struct buf ***out, struct buf **out_end, const struct ether_addr *src __attribute__((unused)),
+                        const struct ether_addr *dst __attribute__((unused)), struct awdl_state *state) {
+ 	/* Iterate over all subframes */
+ 	while (buf_len(frame) > 0) {
+@@ -428,7 +433,7 @@ int awdl_rx_data_amsdu(const struct buf *frame, struct buf ***out, const struct
+ 			return RX_TOO_SHORT;
+ 		/* create subview of buf */
+ 		subframe = buf_new_const(buf_data(frame), len_a);
+-		err = awdl_rx_data(subframe, out, &src_a, &dst_a, state);
++		err = awdl_rx_data(subframe, out, out_end, &src_a, &dst_a, state);
+ 		buf_free(subframe);
+ 		if (err < 0)
+ 			return err;
+@@ -487,7 +492,7 @@ wire_error:
+ 	return -1;
+ }
+ 
+-int awdl_rx(const struct buf *frame, struct buf ***data_frame, struct awdl_state *state) {
++int awdl_rx(const struct buf *frame, struct buf ***data_frame, struct buf **data_end, struct awdl_state *state) {
+ 	const struct ieee80211_hdr *ieee80211;
+ 	const struct ether_addr *from, *to;
+ 	uint16_t fc, qosc; /* frame and QoS control */
+@@ -527,10 +532,10 @@ int awdl_rx(const struct buf *frame, struct buf ***data_frame, struct awdl_state
+ 			BUF_STRIP(frame, IEEE80211_QOS_CTL_LEN);
+ 			/* TODO should handle block acks if required (IEEE80211_QOS_CTL_ACK_POLICY_XYZ) */
+ 			if (qosc & IEEE80211_QOS_CTL_A_MSDU_PRESENT)
+-				return awdl_rx_data_amsdu(frame, data_frame, from, to, state);
++				return awdl_rx_data_amsdu(frame, data_frame, data_end, from, to, state);
+ 			/* else fall through */
+ 		case IEEE80211_FTYPE_DATA | IEEE80211_STYPE_DATA:
+-			return awdl_rx_data(frame, data_frame, from, to, state);
++			return awdl_rx_data(frame, data_frame, data_end, from, to, state);
+ 		default:
+ 			log_warn("ieee80211: cannot handle type %x and subtype %x of received frame from %s",
+ 			         fc & IEEE80211_FCTL_FTYPE, fc & IEEE80211_FCTL_STYPE, ether_ntoa(from));
+diff --git i/src/rx.h w/src/rx.h
+index 9565fea..48fb5ac 100644
+--- i/src/rx.h
++++ w/src/rx.h
+@@ -36,6 +36,7 @@ enum RX_RESULT {
+ 	RX_UNEXPECTED_TYPE = -2,
+ 	RX_UNEXPECTED_VALUE = -3,
+ 	RX_TOO_SHORT = -3,
++	RX_TOO_MANY_FRAMES = -4,
+ };
+ 
+ int awdl_handle_sync_params_tlv(struct awdl_peer *src, const struct buf *val, struct awdl_state *state, uint64_t tsft);
+@@ -64,19 +65,20 @@ int awdl_rx_action(const struct buf *frame, signed char rssi, uint64_t tsft,
+ int llc_parse(const struct buf *frame, struct llc_hdr *llc);
+ int awdl_valid_llc_header(const struct buf *frame);
+ 
+-int awdl_rx_data(const struct buf *frame, struct buf ***out,
++int awdl_rx_data(const struct buf *frame, struct buf ***out, struct buf **out_end,
+                  const struct ether_addr *src, const struct ether_addr *dst, struct awdl_state *state);
+ 
+-int awdl_rx_data_amsdu(const struct buf *frame, struct buf ***out,
++int awdl_rx_data_amsdu(const struct buf *frame, struct buf ***out, struct buf **out_end,
+                        const struct ether_addr *src, const struct ether_addr *dst, struct awdl_state *state);
+ 
+ /** @brief Receive and process AWDL action and data frame
+  *
+  * @param frame input frame
+  * @param data if {@code frame} points to a valid AWDL data frame, will point to converted Ethernet frame after function returns
++ * @param data_end end of the array {@code data} points into: a frame that would convert to more Ethernet frames than fit fails with RX_TOO_MANY_FRAMES
+  * @param state
+  * @return RX_OK
+  */
+-int awdl_rx(const struct buf *frame, struct buf ***data_frames, struct awdl_state *state);
++int awdl_rx(const struct buf *frame, struct buf ***data_frames, struct buf **data_end, struct awdl_state *state);
+ 
+ #endif /* AWDL_RX_H_ */

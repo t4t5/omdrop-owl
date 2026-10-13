@@ -1,0 +1,126 @@
+diff --git i/daemon/core.c w/daemon/core.c
+index c19ccea..5e2b15f 100644
+--- i/daemon/core.c
++++ w/daemon/core.c
+@@ -27,6 +27,7 @@
+ #include "schedule.h"
+ 
+ #include <signal.h>
++#include <errno.h>
+ 
+ #ifdef __APPLE__
+ # define SIGSTATS SIGINFO
+@@ -143,9 +144,10 @@ int awdl_send_data(const struct buf *buf, const struct io_state *io_state,
+ 	READ_ETHER_ADDR(buf, ETHER_DST_OFFSET, &dst);
+ 	READ_ETHER_ADDR(buf, ETHER_SRC_OFFSET, &src);
+ 
+-	buf_strip(buf, ETHER_LENGTH);
++	/* Read past the Ethernet header rather than strip it, so a frame that
++	 * comes back TX_AGAIN can be handed in again unchanged. */
+ 	awdl_data_len = awdl_init_full_data_frame(awdl_data, &src, &dst,
+-	                                          buf_data(buf), buf_len(buf),
++	                                          buf_data(buf) + ETHER_LENGTH, buf_len(buf) - ETHER_LENGTH,
+ 	                                          awdl_state, ieee80211_state);
+ 	now = clock_time_us();
+ 	period = awdl_sync_current_eaw(now, &awdl_state->sync) / AWDL_CHANSEQ_LENGTH;
+@@ -153,8 +155,11 @@ int awdl_send_data(const struct buf *buf, const struct io_state *io_state,
+ 	tu = awdl_sync_next_aw_tu(now, &awdl_state->sync);
+ 	log_trace("Send data (len %d) to %s (%u.%u.%u)", awdl_data_len,
+ 	          ether_ntoa(&dst), period, slot, tu);
++	int err = wlan_send(io_state, awdl_data, awdl_data_len);
++	if (err == -EAGAIN)
++		return TX_AGAIN;
+ 	awdl_state->stats.tx_data++;
+-	if (wlan_send(io_state, awdl_data, awdl_data_len) < 0)
++	if (err < 0)
+ 		return TX_FAIL;
+ 	return TX_OK;
+ 
+@@ -222,10 +227,17 @@ void awdl_send_unicast(struct ev_loop *loop, ev_timer *timer, int revents) {
+ 		} else {
+ 			in = awdl_can_send_unicast_in(awdl_state, peer, now, AWDL_UNICAST_GUARD_TU);
+ 			if (in == 0) { /* send now */
+-				awdl_send_data(state->next, &state->io, &state->awdl_state, &state->ieee80211_state);
+-				buf_free(state->next);
+-				state->next = NULL;
+-				state->awdl_state.stats.tx_data_unicast++;
++				if (awdl_send_data(state->next, &state->io, &state->awdl_state, &state->ieee80211_state) == TX_AGAIN) {
++					/* Queue full: keep the frame and come back in half a
++					 * millisecond, without blocking the loop. The gate above is
++					 * checked again then, so it still only leaves while the
++					 * peer is on our channel. */
++					in = 0.0005;
++				} else {
++					buf_free(state->next);
++					state->next = NULL;
++					state->awdl_state.stats.tx_data_unicast++;
++				}
+ 			} else { /* try later */
+ 				if (in < 0) /* we are at the end of slot but within guard */
+ 					in = -in + usec_to_sec(ieee80211_tu_to_usec(AWDL_UNICAST_GUARD_TU));
+diff --git i/daemon/io.c w/daemon/io.c
+index 9a1ebe1..87a0190 100644
+--- i/daemon/io.c
++++ w/daemon/io.c
+@@ -388,6 +388,13 @@ int wlan_send(const struct io_state *state, const uint8_t *buf, int len) {
+ 		return -EINVAL;
+ 	err = pcap_inject(state->wlan_handle, buf, len);
+ 	if (err < 0) {
++		/* The handle is non-blocking: EAGAIN means the driver queue is full
++		 * right now. Hand it back so a unicast caller can keep the frame and
++		 * try again from the event loop, instead of dropping it (2026-10-10:
++		 * 8383 drops in one 34 MB receive on an Intel card, among them the
++		 * TCP ACKs the phone needed, so uploads died just short of the end). */
++		if (errno == EAGAIN || errno == ENOBUFS)
++			return -EAGAIN;
+ 		log_error("unable to inject packet (%s)", pcap_geterr(state->wlan_handle));
+ 		return err;
+ 	}
+diff --git i/src/peers.c w/src/peers.c
+index 2202de8..b505cbc 100644
+--- i/src/peers.c
++++ w/src/peers.c
+@@ -29,7 +29,8 @@
+  * documented. They are consumed as us by awdl_clean_peers() (cutoff against
+  * clock_time_us()) and by usec_to_sec() when arming the cleanup timer.
+  * Effective policy: evict peers unheard for 2 s, swept once per second. */
+-#define PEERS_DEFAULT_TIMEOUT        2000000 /* in us (2 s) */
++/* 5 s, not 2: a busy iPhone can miss several of our slots in a row (2026-10-10). */
++#define PEERS_DEFAULT_TIMEOUT        5000000 /* in us (5 s) */
+ #define PEERS_DEFAULT_CLEAN_INTERVAL 1000000 /* in us (1 s) */
+ 
+ void awdl_peer_state_init(struct awdl_peer_state *state) {
+diff --git i/src/rx.c w/src/rx.c
+index 4581ae5..a15f343 100644
+--- i/src/rx.c
++++ w/src/rx.c
+@@ -374,8 +374,16 @@ int awdl_rx_data(const struct buf *frame, struct buf ***out, const struct ether_
+ 	log_trace("awdl_data: receive from %s", ether_ntoa(src));
+ 	state->stats.rx_data++;
+ 
+-	if (awdl_peer_get(state->peers.peers, src, NULL) != PEERS_OK)
++	struct awdl_peer *peer;
++	if (awdl_peer_get(state->peers.peers, src, &peer) != PEERS_OK)
+ 		return RX_IGNORE_PEER;
++	/* Data from a peer proves it is still there. Only action frames used to
++	 * refresh it, and an iPhone deep in a transfer, visiting our channel for
++	 * one slot in sixteen, can go 2 s between the ones we hear: OWL then
++	 * dropped it mid-upload and threw away our ACKs to it ("Drop frame to
++	 * non-peer", 1405 in one 34 MB receive on 2026-10-10), the final ACK
++	 * among them, so the phone waited until the upload timed out. */
++	peer->last_update = clock_time_us();
+ 
+ 	if (!awdl_valid_llc_header(frame))
+ 		return RX_UNEXPECTED_FORMAT;
+diff --git i/src/tx.h w/src/tx.h
+index 33b1e0c..f9df0eb 100644
+--- i/src/tx.h
++++ w/src/tx.h
+@@ -29,6 +29,7 @@
+ enum TX_RESULT {
+ 	TX_OK = 0,
+ 	TX_FAIL = -1,
++	TX_AGAIN = -2, /* driver queue full: the frame was not sent, try again */
+ };
+ 
+ int awdl_init_action(uint8_t *buf, enum awdl_action_type);

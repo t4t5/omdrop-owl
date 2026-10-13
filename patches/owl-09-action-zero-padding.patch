@@ -1,0 +1,22 @@
+diff --git i/src/rx.c w/src/rx.c
+index 3e6af09..e036be1 100644
+--- i/src/rx.c
++++ w/src/rx.c
+@@ -321,6 +321,17 @@ int awdl_rx_action(const struct buf *frame, signed char rssi, uint64_t tsft,
+ 		buf_strip(frame, len);
+ 	}
+ 
++	/* iPhones end some MIFs with zero padding. The loop above reads it as
++	 * empty TLVs until fewer bytes than a TLV header are left: strip those
++	 * too. A nonzero remainder is still a truncated TLV. */
++	if (buf_len(frame) < 3) {
++		int zeros = 0;
++		while (zeros < buf_len(frame) && buf_data(frame)[zeros] == 0)
++			zeros++;
++		if (zeros == buf_len(frame))
++			buf_strip(frame, zeros);
++	}
++
+ 	if (buf_len(frame) > 0) {
+ 		log_debug("awdl_action: unexpected bytes (%d) at end of frame", buf_len(frame));
+ 		return RX_UNEXPECTED_FORMAT;
