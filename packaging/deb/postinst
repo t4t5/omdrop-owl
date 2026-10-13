@@ -14,6 +14,9 @@ if [ "$1" = configure ]; then
   firmware. Nothing runs until omdrop asks. Install omdrop itself, 0.16.0 or
   newer, and turn it on from there.
 
+  Intel AX211 8086:51f0 uses an experimental connected GO mode: Wi-Fi stays
+  connected on its existing channel. Other cards follow their radio profile.
+
   In shared mode, your Wi-Fi access point has to be on channel 6, 44 or 149:
   AirDrop shares its channel. `/usr/lib/omdrop/omdrop-discoverable probe` says what, if
   anything, is in the way.

@@ -9,6 +9,8 @@
 #   mode       shared: AWDL shares the AP's channel and Wi-Fi stays connected
 #              exclusive: Wi-Fi is disconnected for the window, for cards that
 #              can't inject, or hear AWDL, while associated (README)
+#              go: secondary channel-6 P2P GO, leaving Wi-Fi connected.
+#              Driver:vendor:device lines override driver lines within a table.
 #   mon_mac    station: the monitor interface carries the station's MAC, and OWL
 #              reads it from there; own: it keeps a MAC of its own and OWL is
 #              given the station's (owl -m)
@@ -19,6 +21,7 @@
 #
 # driver   status    mode    mon_mac  reconnect  mt76_pm  notes
 mt7925e    tested    shared  station  yes        yes      MediaTek MT7925 (Framework 13). Injects while associated, sending from the station's MAC; the station ACKs the phone's unicast. Without a reconnect, the station stops receiving 3-165 s after a monitor interface is deleted.
+iwlwifi:8086:51f0 tested go station no no Intel AX211 (XPS 9320, kernel 7.2.8, firmware 89.d2579d43.0). Native photo both ways with managed Wi-Fi on channel 36 and a channel-6 GO. No disconnect fallback. Requires permitted channel 6 and two-channel GO support; unicast queue warning and wider reliability remain under investigation.
 iwlwifi    tested    exclusive  station  no       no       Intel AX201 (kernels 6.8 and 7.2.9), AX211 (kernels 7.0 and 7.2.3) and BE on Panther Lake (kernel 7.2). Associated, the firmware passes up no AWDL frames. Starts no ad-hoc cell on 5 GHz, so runs on channel 6: a 2.4 MB photo from an iPhone in 17 s, to it in 10.5 s. Some AX211s refuse an ad-hoc vif beside the station, so the station becomes the cell. The AX200 is untested.
 rtw88_8822be  tested  exclusive  station  no     no       Realtek RTL8822BE (kernel 7.2.9). Shared mode is untried. The ad-hoc vif sits beside the station. Starts no ad-hoc cell on 5 GHz (EINVAL on 44 and 149, neither "No IR"), so runs on channel 6: a 6.4 MB photo from an iPhone in 110 s. The kernel logs "failed to get tx report from firmware" through the window. The station is back about 6 s after teardown and stayed up for the five minutes watched, without a forced reconnect.
 *          untested  shared  station  yes        no       Any other card. Needs monitor-mode injection while associated, and an AP on channel 6, 44 or 149.

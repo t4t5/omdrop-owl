@@ -43,6 +43,8 @@ OWL_LOG=$RUN/owl.log
 IF=awdl0
 MON=mon0
 IBSS=awdlibss0
+GO=awdlgo0
+GO_UNIT=omdrop-owl-go.service
 AWDL_BSSID=00:25:00:ff:94:73
 OWL_BIN=$LIB/owl
 PROFILES=$LIB/owl-profiles
@@ -86,7 +88,7 @@ station_iface() {
   [ -n "$forced" ] && { echo "$forced"; return; }
   for d in /sys/class/net/*/phy80211; do
     name=$(basename "$(dirname "$d")")
-    [ "$name" = "$IF" ] || [ "$name" = "$MON" ] || [ "$name" = "$IBSS" ] && continue
+    [ "$name" = "$IF" ] || [ "$name" = "$MON" ] || [ "$name" = "$IBSS" ] || [ "$name" = "$GO" ] && continue
     iw dev "$name" info 2>/dev/null | grep -q 'type managed' || continue
     echo "$name"
     return
@@ -99,15 +101,71 @@ driver_of() { basename "$(readlink -f "/sys/class/net/$1/device/driver")" 2>/dev
 # PROF_MODE, PROF_MONMAC, PROF_RECONNECT and PROF_PM (see owl-profiles).
 # $CONF/owl-profiles, when present, is read first: it's where to try settings
 # for a new card without editing the packaged table.
-load_profile() {  # DRIVER
-  local line _ tables=()
+load_profile() {  # DRIVER [STATION]
+  local line="" _ table pci="" vendor device tables=()
   [ -r "$CONF/owl-profiles" ] && tables+=("$CONF/owl-profiles")
   [ -r "$PROFILES" ] && tables+=("$PROFILES")
   [ ${#tables[@]} -gt 0 ] || return 1
-  line=$(awk -v d="$1" '!/^#/ && NF >= 6 && $1 == d {print; exit}' "${tables[@]}")
+  if [ -n "${2:-}" ]; then
+    vendor=$(cat "/sys/class/net/$2/device/vendor" 2>/dev/null)
+    device=$(cat "/sys/class/net/$2/device/device" 2>/dev/null)
+    [[ "$vendor:$device" =~ ^0x[0-9a-f]{4}:0x[0-9a-f]{4}$ ]] && pci="$1:${vendor#0x}:${device#0x}"
+  fi
+  # An administrator's driver line overrides the packaged PCI-specific line.
+  for table in "${tables[@]}"; do
+    line=$(awk -v d="$1" -v p="$pci" '!/^#/ && NF >= 6 {
+      if (p != "" && $1 == p) {print; found=1; exit}
+      if ($1 == d && generic == "") generic=$0
+    } END {if (!found && generic != "") print generic}' "$table")
+    [ -z "$line" ] || break
+  done
   [ -n "$line" ] || line=$(awk '!/^#/ && NF >= 6 && $1 == "*" {print; exit}' "${tables[@]}")
   [ -n "$line" ] || return 1
   read -r _ PROF_STATUS PROF_MODE PROF_MONMAC PROF_RECONNECT PROF_PM _ <<< "$line"
+}
+
+# The manager owns the entire connected-mode setup and teardown, including
+# cleanup after SIGKILL. There is deliberately no fallback that drops Wi-Fi.
+connected_stop_service() {
+  # --collect removes an expired unit. That is already stopped, not an error.
+  systemctl stop "$GO_UNIT" 2>/dev/null && return 0
+  [ "$(systemctl show "$GO_UNIT" -p LoadState --value 2>/dev/null)" = not-found ]
+}
+
+connected_start() {  # STATION SECONDS
+  local sta=$1 secs=$2 iface attempt why
+  [ -x "$LIB/awdl-go" ] && [ -r "$LIB/connected-radio.py" ] || die "Connected AX211 helpers are missing; reinstall omdrop-owl" 4
+  if [ -e "$RUN/go-mode" ]; then
+    connected_stop_service || return 4
+    python3 "$LIB/connected-radio.py" cleanup || return 4
+  fi
+  for iface in "$GO" "$MON" "$IF"; do
+    [ ! -e "/sys/class/net/$iface" ] || die "Interface $iface already exists; stop its owner first" 4
+  done
+  : > "$OWL_LOG"
+  : > "$RUN/go.log"
+  : > "$RUN/go-mode"
+  rm -f "$RUN/go-ready"
+  echo "$sta" > "$RUN/station"
+  echo "$drv go station no no" > "$RUN/profile"
+  if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
+  systemctl reset-failed "$GO_UNIT" 2>/dev/null || true
+  if ! systemd-run --quiet --collect --unit="$GO_UNIT" --property=Type=exec \
+    --property=TimeoutStopSec=15s --property=KillMode=control-group \
+    --property="ExecStopPost=/usr/bin/python3 $LIB/connected-radio.py cleanup" \
+    /usr/bin/python3 "$LIB/connected-radio.py" run --station "$sta"; then
+    echo 'Could not start the connected AX211 service' > "$RUN/reason"
+    return 4
+  fi
+  for attempt in $(seq 250); do
+    [ ! -e "$RUN/go-ready" ] || { log "connected AX211 window ready"; return 0; }
+    systemctl is-active --quiet "$GO_UNIT" || break
+    sleep 0.1
+  done
+  why=$(cat "$RUN/reason" 2>/dev/null)
+  systemctl stop "$GO_UNIT" 2>/dev/null
+  echo "omdrop-discoverable: ${why:-Connected AX211 radio did not become ready}" >&2
+  return 4
 }
 
 untested_hint() {
@@ -223,6 +281,10 @@ exclusive_down() {
 # --------------------------------------------------------------------- status
 
 visible() {
+  if [ -e "$RUN/go-mode" ]; then
+    [ -e "$RUN/go-ready" ] && alive "$(pid_of supervisor)" connected-radio.py && alive "$(pid_of owl)" "$OWL_BIN"
+    return
+  fi
   alive "$(pid_of supervisor)" __supervise && alive "$(pid_of owl)" "$OWL_BIN" \
     && ip -6 addr show dev "$IF" scope link 2>/dev/null | grep -q inet6 \
     && ! ip -6 addr show dev "$IF" scope link | grep -q tentative
@@ -241,8 +303,12 @@ cmd_status() {
   # transmit. The log outlives a window, so only while one is up.
   [ "$vis" = true ] && grep -q 'add peer' "$OWL_LOG" 2>/dev/null && rx=true
   if [ "${1:-}" = --json ]; then
-    printf '{"visible":%s,"remaining":%s,"reason":"%s","rx_proven":%s,"peer_op":""}\n' \
-      "$vis" "$remaining" "${reason//\"/}" "$rx"
+    VIS=$vis REMAINING=$remaining REASON=$reason RX=$rx python3 -c '
+import json, os
+print(json.dumps({"visible": os.environ["VIS"] == "true",
+                  "remaining": json.loads(os.environ["REMAINING"]),
+                  "reason": os.environ["REASON"],
+                  "rx_proven": os.environ["RX"] == "true", "peer_op": ""}, separators=(",", ":")))'
   else
     printf 'visible=%s remaining=%s reason=%s rx_proven=%s\n' "$vis" "$remaining" "${reason:-}" "$rx"
   fi
@@ -280,7 +346,7 @@ cmd_probe() {
   if [ -z "$sta" ]; then
     hw=false
     missing+=("hardware|This computer has no Wi-Fi interface that omdrop-owl can use.")
-  elif ! load_profile "$drv"; then
+  elif ! load_profile "$drv" "$sta"; then
     hw=false
     missing+=("backend|omdrop-owl is installed without its hardware profiles ($PROFILES). Reinstall omdrop-owl.")
   elif [ "$PROF_STATUS" != tested ] && [ "$(knob allow-untested)" != 1 ]; then
@@ -288,20 +354,24 @@ cmd_probe() {
     missing+=("hardware|$(untested_hint "$drv")")
   else
     [ -x "$OWL_BIN" ] || missing+=("backend|omdrop-owl is installed without OWL ($OWL_BIN). Reinstall omdrop-owl.")
-    [ "$PROF_MODE" = shared ] || [ "$PROF_MODE" = exclusive ] || missing+=("backend|This Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet.")
+    [ "$PROF_MODE" = shared ] || [ "$PROF_MODE" = exclusive ] || [ "$PROF_MODE" = go ] || missing+=("backend|This Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet.")
+    if [ "$PROF_MODE" = go ]; then
+      [ -x "$LIB/awdl-go" ] && [ -r "$LIB/connected-radio.py" ] || missing+=("backend|Connected AX211 helpers are missing; reinstall omdrop-owl.")
+    fi
     ap=$(iw dev "$sta" link 2>/dev/null | awk '/freq:/ {print int($2)}')
     case "$PROF_MODE:$ap" in
-      exclusive:*|*:2437|*:5220|*:5745) ;;
+      go:) missing+=("radio|Wi-Fi must be connected before AX211 AirDrop starts.") ;;
+      go:*|exclusive:*|*:2437|*:5220|*:5745) ;;
       *:) missing+=("radio|Wi-Fi isn't connected, and AirDrop shares its channel. Connect to Wi-Fi first.") ;;
       *) missing+=("radio|Your Wi-Fi network is on $ap MHz, but AirDrop can only share channel 6, 44 or 149 with it. Moving the router to one of those makes this work.") ;;
     esac
   fi
   [ "${1:-}" = --json ] || { printf '%s\n' "${missing[@]:-ready}"; return 0; }
-  MISSING=$(printf '%s\n' "${missing[@]}") HW=$hw V=$VERSION C=$CONTRACT python3 -c '
+  MODE=${PROF_MODE:-unknown} MISSING=$(printf '%s\n' "${missing[@]}") HW=$hw V=$VERSION C=$CONTRACT python3 -c '
 import json, os
 rows = [l.split("|", 1) for l in os.environ["MISSING"].split("\n") if l.strip()]
 print(json.dumps({"backend": "owl", "version": os.environ["V"], "contract": os.environ["C"],
-                  "hardware": os.environ["HW"] == "true",
+                  "hardware": os.environ["HW"] == "true", "mode": os.environ["MODE"],
                   "missing": [{"id": r[0], "say": r[1]} for r in rows]}))'
 }
 
@@ -312,6 +382,14 @@ cmd_stop() {
   need_root
   exec 9> "$RUN/lock" 2>/dev/null || { mkdir -p "$RUN"; exec 9> "$RUN/lock"; }
   flock 9
+  if [ -e "$RUN/go-mode" ]; then
+    connected_stop_service || return 4
+    python3 "$LIB/connected-radio.py" cleanup || return 4
+    rm -f "$RUN/go-mode" "$RUN/until"
+    printf '%s' "$why" > "$RUN/reason"
+    log "stopped connected AX211 mode ($why); station untouched"
+    return 0
+  fi
   sup=$(pid_of supervisor)
   # The supervisor calls `stop expired` itself; don't kill the caller.
   [ -n "$sup" ] && [ "$sup" != "$$" ] && [ "$sup" != "${PPID:-}" ] && kill "$sup" 2>/dev/null
@@ -380,10 +458,17 @@ cmd_start() {
   flock 9
   [ -x "$OWL_BIN" ] || die "OWL is not installed at $OWL_BIN" 4
 
-  if alive "$(pid_of supervisor)" __supervise; then
+  if visible; then
     if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
     log "already discoverable; window now ${secs}s"
     exit 5
+  fi
+  # Clear an expired/crashed GO session before loading a possibly changed
+  # profile. Never hand its interfaces to another mode's teardown.
+  if [ -e "$RUN/go-mode" ]; then
+    connected_stop_service || return 4
+    python3 "$LIB/connected-radio.py" cleanup || return 4
+    rm -f "$RUN/go-mode"
   fi
   : > "$RUN/log"
   : > "$RUN/announce.log"
@@ -398,11 +483,15 @@ cmd_start() {
   sta=$(station_iface)
   [ -n "$sta" ] || die "no Wi-Fi interface to run AWDL on" 4
   drv=$(driver_of "$sta")
-  load_profile "$drv" || die "no hardware profile at $PROFILES; reinstall omdrop-owl" 4
+  load_profile "$drv" "$sta" || die "no hardware profile at $PROFILES; reinstall omdrop-owl" 4
   if [ "$PROF_STATUS" != tested ] && [ "$(knob allow-untested)" != 1 ]; then
     die "$(untested_hint "$drv")" 4
   fi
-  [ "$PROF_MODE" = shared ] || [ "$PROF_MODE" = exclusive ] || die "this Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet" 4
+  [ "$PROF_MODE" = shared ] || [ "$PROF_MODE" = exclusive ] || [ "$PROF_MODE" = go ] || die "this Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet" 4
+  if [ "$PROF_MODE" = go ]; then
+    connected_start "$sta" "$secs"
+    return $?
+  fi
   phy=$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")
   if [ "$PROF_MODE" = exclusive ]; then
     gw=none

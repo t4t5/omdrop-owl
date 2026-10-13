@@ -30,7 +30,7 @@ sudo apt install ./omdrop-owl_*.deb
 This builds OWL at the commit pinned in `pins`, with `patches/`,
 and installs it root-owned into `/usr/lib/omdrop` together with
 `omdrop-discoverable` and omdrop-awdl's portable tools, a polkit policy for the
-helper, and a NetworkManager rule keeping `awdl0`, `mon0` and `awdlibss0`
+helper, and a NetworkManager rule keeping `awdl0`, `mon0`, `awdlgo0` and `awdlibss0`
 unmanaged. It conflicts with `brcmfmac-awdl-dkms`: one radio backend at a time.
 
 </details>
@@ -47,6 +47,7 @@ and turn it on from the bar.
 ## Supported hardware
 
 - **Shared** mode = Wi-Fi stays connected
+- **Connected GO** mode = Wi-Fi stays connected; AX211-specific secondary radio context
 - **Exclusive** mode = Wi-Fi is *off* while the machine is visible (see [why](#exclusive-mode))
 
 | Card | Driver | Status | Tested on |
@@ -54,7 +55,8 @@ and turn it on from the bar.
 | MediaTek MT7925 | `mt7925e` | ✅ Shared | Framework 13, `14c3:0717`, Omarchy 4.0.4 (kernel 7.2.5) |
 | Intel AX200 | `iwlwifi` | ✅ Exclusive | ThinkPad X1 Yoga, `8086:2723`, NixOS 26.05 (kernel 6.19.8) |
 | Intel AX201 | `iwlwifi` | ✅ Exclusive | Ubuntu 24.04 (kernel 6.8); CachyOS (kernel 7.2.9) |
-| Intel AX211 | `iwlwifi` | ✅ Exclusive | ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0); XPS 9320, `8086:51f0`, Arch (kernel 7.2.3) |
+| Intel AX211 | `iwlwifi` | Experimental connected GO | XPS 9320, `8086:51f0`, Arch (kernel 7.2.8-5-omarchy-bore), firmware `89.d2579d43.0` |
+| Intel AX211 | `iwlwifi` | ✅ Exclusive | ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0) |
 | Intel BE (Panther Lake) | `iwlwifi` | ✅ Exclusive | XPS 16, `8086:e440`, Arch (kernel 7.2) |
 | Realtek RTL8822BE | `rtw88_8822be` | ✅ Exclusive; shared untested | Crosshair VII Hero, `10ec:b822`, NixOS 26.11 (kernel 7.2.9) |
 | MediaTek MT7921 | `mt7921e` | ❌ Exclusive ([#14](https://github.com/t4t5/omdrop-owl/issues/14)); shared untested | `14c3:7961`, CachyOS (kernel 7.2.9) |
@@ -76,8 +78,10 @@ One card name can cover chips that behave differently, so a report from a machin
 ### Adding your card
 
 What omdrop-owl does on each Wi-Fi driver comes from
-[`userspace/owl-profiles`](userspace/owl-profiles), one line per driver, so the
-`iwlwifi` line covers every Intel card. A driver with
+[`userspace/owl-profiles`](userspace/owl-profiles), one line per driver or `driver:vendor:device` PCI ID.
+The AX211 `iwlwifi:8086:51f0` line takes precedence over the generic Intel line.
+An administrator override in `/etc/omdrop/owl-profiles` takes precedence over
+either packaged entry. A driver with
 no line falls back to the `*` line, which only runs once you opt in with
 `echo 1 | sudo tee /etc/omdrop/allow-untested`.
 
@@ -116,10 +120,38 @@ a monitor interface using the station's MAC, and advertises only the phone's
 slots on that channel (`-S intersect`). On the MT7925, the station handles
 ACKs. OWL exposes `awdl0` for omdrop's receiver and AirDrop announcements.
 
+### Connected GO mode (AX211)
+
+The `8086:51f0` profile uses the stock driver. A small netlink helper creates
+`awdlgo0`, a secondary P2P GO on channel 6, plus a monitor interface with the
+same random local MAC. OWL uses this context for AWDL while the normal station
+stays associated on its existing channel. The GO does not provide authentication,
+DHCP, routing or an Internet hotspot. No kernel patch or driver reload is needed.
+
+A systemd service owns the helper, OWL and periodic AirDrop announcements.
+It stops at the requested deadline, when a child fails, when the station's BSSID
+changes, or after three failed gateway probes. Stop and crash recovery remove
+only interfaces matching the recorded MAC, PHY and (once known) interface index.
+Existing interface names cause refusal. There is no fallback to disconnecting
+Wi-Fi if this mode cannot start.
+
+Requirements: NetworkManager, systemd, a connected IPv4 Wi-Fi gateway that answers
+pings, legal channel 6 transmission, and advertised two-channel P2P GO concurrency.
+The AP need not use an AWDL channel; the initial XPS test used channel 36.
+The profile is experimental: a 272,892-byte PNG transferred in both directions
+in the bounded prototype test while all 386 gateway probes passed. This is not
+qualification for every AX211 firmware, router, roaming, suspend or long transfer.
+The tested stock driver emits an existing `iwlwifi` unassociated-injection warning.
+
+Use normal `omdrop on 2m`, `omdrop send NAME FILE`, and `omdrop off` commands.
+`omdrop-discoverable probe` reports `mode: "go"`; diagnostics live under
+`/run/omdrop-owl/` and in `journalctl -u omdrop-owl-go.service`. Raw radio logs
+may contain device identifiers and should be redacted before sharing.
+
 ### Exclusive mode
 
-No Intel card tested works in shared mode, so `iwlwifi` disconnects Wi-Fi
-while the machine is visible and restores it on `stop`.
+Intel cards without a connected GO profile use exclusive mode: `iwlwifi`
+disconnects Wi-Fi while the machine is visible and restores it on `stop`.
 
 - An ad-hoc (IBSS) interface joins AWDL's BSSID to handle ACKs. Some AX211s
   need the Wi-Fi interface itself repurposed for this.

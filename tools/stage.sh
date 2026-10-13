@@ -11,6 +11,7 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+bash "$ROOT/tools/build-go.sh"
 UPSTREAM_REPO=https://github.com/brentkearney/omdrop-awdl.git
 . "$ROOT/pins"
 UPSTREAM_COMMIT=$OMDROP_AWDL_COMMIT
@@ -50,6 +51,7 @@ for f in "${FROM_UPSTREAM[@]}"; do
 done
 cp "$ROOT"/userspace/* "$LIB/"
 cp "$OWL_BIN" "$LIB/owl"
+cp "$ROOT/build/awdl-go" "$LIB/awdl-go"
 chmod 755 "$LIB/send-to-peer" "$LIB/omdrop-discoverable" "$LIB/owl" "$LIB"/*.py
 
 echo "staged $LIB: ${#FROM_UPSTREAM[@]} files from omdrop-awdl@${UPSTREAM_COMMIT:0:7}, $(ls "$ROOT/userspace" | wc -l) of ours, and owl"

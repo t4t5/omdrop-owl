@@ -17,11 +17,11 @@ url="https://github.com/t4t5/omdrop-owl"
 # OWL (and our patches to it) GPL-3.0-or-later; its bundled radiotap parser
 # ISC; omdrop-awdl's tools GPL-2.0-only. They ship as separate programs.
 license=('GPL-3.0-or-later' 'GPL-2.0-only' 'ISC')
-depends=('bash' 'python' 'iproute2' 'iputils' 'iw' 'polkit' 'util-linux' 'procps-ng'
+depends=('bash' 'python' 'iproute2' 'iputils' 'iw' 'polkit' 'util-linux' 'procps-ng' 'systemd'
          'libpcap' 'libev' 'libnl' 'networkmanager' 'keyutils'
          'python-libarchive-c' 'python-pillow' 'python-zeroconf' 'python-ifaddr'
          'bluez' 'python-dbus' 'python-gobject')
-makedepends=('git' 'cmake' 'gcc')
+makedepends=('git' 'cmake' 'gcc' 'pkgconf')
 # Both own /usr/lib/omdrop: one radio backend at a time.
 conflicts=('brcmfmac-awdl-dkms')
 install="${pkgname}.install"
@@ -64,6 +64,9 @@ prepare() {
 }
 
 build() {
+  local tree="${startdir}"
+  cc -O2 -Wall -Wextra -Werror "${tree}/native/awdl-go.c" \
+    $(pkg-config --cflags --libs libnl-3.0 libnl-genl-3.0) -o awdl-go
   # The policy minimum is for the bundled googletest, whose
   # cmake_minimum_required predates 3.5, which CMake 4 refuses. Only the owl
   # target is built: googletest fails under current GCC and isn't needed.
@@ -72,6 +75,9 @@ build() {
 }
 
 check() {
+  local tree="${startdir}"
+  ./awdl-go --self-test
+  python3 -m unittest discover -s "${tree}/tests" -p 'test_*.py'
   case "$(build/daemon/owl -S intersect -R 12 -m 02:00:00:00:00:01 -F -E -h 2>&1 || true)" in
     *"invalid option"*|*"-R takes"*|*"-m takes"*) error "owl lacks -S, -R, -m, -F or -E: the patches did not apply"; return 1 ;;
   esac
@@ -81,6 +87,8 @@ package() {
   local tree="${startdir}" lib="${pkgdir}/usr/lib/omdrop" f
   install -Dm755 "${tree}/userspace/omdrop-discoverable" "${lib}/omdrop-discoverable"
   install -Dm644 "${tree}/userspace/owl-profiles" "${lib}/owl-profiles"
+  install -Dm755 "${tree}/userspace/connected-radio.py" "${lib}/connected-radio.py"
+  install -Dm755 awdl-go "${lib}/awdl-go"
   install -Dm755 build/daemon/owl "${lib}/owl"
   for f in "${_from_omdrop_awdl[@]}"; do
     install -Dm755 "omdrop-awdl/userspace/${f}" "${lib}/${f}"

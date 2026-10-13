@@ -59,9 +59,9 @@ jobs:
             # a change to those needs a new tag. The checkout is shallow and
             # has no tags.
             git fetch --quiet --depth=1 origin tag "v$pkgver"
-            if ! git diff --quiet "v$pkgver" HEAD -- pins patches userspace packaging ':!packaging/deb'; then
+            if ! git diff --quiet "v$pkgver" HEAD -- pins patches native userspace packaging ':!packaging/deb'; then
               echo "::error::Files the package installs from the v$pkgver tarball changed since that tag: bump pkgver, not pkgrel."
-              git diff --stat "v$pkgver" HEAD -- pins patches userspace packaging ':!packaging/deb'
+              git diff --stat "v$pkgver" HEAD -- pins patches native userspace packaging ':!packaging/deb'
               exit 1
             fi
           else

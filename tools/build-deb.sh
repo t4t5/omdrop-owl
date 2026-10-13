@@ -20,7 +20,7 @@ ARCH=$(dpkg --print-architecture)
 # PKGBUILD's depends, by their Debian names. The shared libraries OWL links
 # against are added by dpkg-shlibdeps.
 DEPENDS="bash, python3, iproute2, iputils-ping, iw, pkexec, polkitd, util-linux, procps,
- network-manager, keyutils, python3-libarchive-c, python3-pil, python3-zeroconf,
+ systemd, network-manager, keyutils, python3-libarchive-c, python3-pil, python3-zeroconf,
  python3-ifaddr, bluez, python3-dbus, python3-gi"
 
 "$ROOT/tools/build-owl.sh"
@@ -47,17 +47,17 @@ install -Dm644 "$UP/owl/radiotap/COPYING" "$DOC/radiotap-ISC"
 cat > "$DOC/copyright" <<'EOF'
 omdrop-owl ships separate programs under separate licenses:
 
-  omdrop-discoverable, owl-profiles, and the patches to OWL: GPL-3.0-or-later
+  omdrop-discoverable, owl-profiles, awdl-go, connected-radio.py, and OWL patches: GPL-3.0-or-later
   owl (OWL, https://github.com/jedbillyb/owl): GPL-3.0-or-later (OWL-GPL-3.0)
   OWL's bundled radiotap parser: ISC (radiotap-ISC)
-  omdrop-awdl's tools (send-to-peer, *.py): GPL-2.0-only (omdrop-awdl-LICENSE)
+  omdrop-awdl's tools (send-to-peer and its Python scripts): GPL-2.0-only (omdrop-awdl-LICENSE)
 EOF
 
 # dpkg-shlibdeps wants a debian/control to read; it only needs the source
 # stanza.
 mkdir -p "$WORK/debian"
 printf 'Source: %s\n\nPackage: %s\nArchitecture: any\n' "$PKG" "$PKG" > "$WORK/debian/control"
-SHLIBS=$(cd "$WORK" && dpkg-shlibdeps -O "$D/usr/lib/omdrop/owl" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+SHLIBS=$(cd "$WORK" && dpkg-shlibdeps -O "$D/usr/lib/omdrop/owl" "$D/usr/lib/omdrop/awdl-go" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
 [ -n "$SHLIBS" ] || { echo "dpkg-shlibdeps found no library dependencies for owl"; exit 1; }
 
 install -d "$D/DEBIAN"
