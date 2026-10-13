@@ -64,7 +64,8 @@ and turn it on from the bar.
 | MediaTek MT7922 (RZ616) | `mt7921e` | ❓ Untested (opt-in) | — |
 | Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❓ Untested (opt-in) | — |
 | Qualcomm WCN7850 (FastConnect 7800) | `ath12k` | ❓ Untested (opt-in) | — |
-| Realtek RTL8852BE / RTL8852CE | `rtw89_8852be` / `rtw89_8852ce` | ❓ Untested (opt-in) | — |
+| Realtek RTL8852BE | `rtw89_8852be` | ❓ Untested (opt-in) | — |
+| Realtek RTL8852CE | `rtw89_8852ce` | Both directions reported working in shared mode; stability validation pending (opt-in) | Legion Slim 5 16AHP9, `10ec:c852`, Omarchy 4.0.4 (kernel 7.2.5-3-omarchy); [report](#rtl8852ce-legion-slim-5-report) |
 | MediaTek MT7612U (USB) | `mt76x2u` | ❓ Untested (opt-in), in progress in [#13](https://github.com/t4t5/omdrop-owl/pull/13) | — |
 
 - ✅ means both directions work
@@ -101,6 +102,32 @@ around it varies, which is what the profile records.
 
 Cards that can't inject while connected can try `mode exclusive`, which takes
 Wi-Fi away for the window.
+
+### RTL8852CE Legion Slim 5 report
+
+On a Lenovo Legion Slim 5 16AHP9 (model 83DH), the Realtek RTL8852CE
+(`10ec:c852`, subsystem `17aa:5852`, driver `rtw89_8852ce`) was tried on
+Omarchy 4.0.4, kernel `7.2.5-3-omarchy`, with omdrop-owl `0.1.0-1`.
+
+After opting in with `/etc/omdrop/allow-untested`, the laptop connected to
+Wi-Fi on channel 44 (5220 MHz, 40 MHz width), while Ethernet stayed connected.
+The fallback shared profile used `mon_mac station`, `reconnect yes` and
+`mt76_pm no`. The readiness probe returned `hardware: true` with no missing
+requirements. OWL heard AWDL peers and received data; the receiver listened
+on TCP 8771 and announcements were sent.
+
+The iPhone initially showed no recipients. Kernel logs showed UFW dropping
+inbound IPv6 link-local TCP SYNs on `awdl0` to port 8771. The user reported
+AirDrop transfers working in both directions after disabling UFW. Omdrop provides a narrow receiver rule
+via `omdrop firewall install`: it allows only IPv6 link-local sources and
+destinations on `awdl0`, TCP 8771. That rule with UFW enabled has not yet been
+verified on this machine.
+
+This is a preliminary manual report: transfer timing was not recorded,
+and `tools/test-card.sh` was not run. Wi-Fi continuity during the window
+and the five-minute post-teardown watch
+still need validation. The driver remains opt-in; this report does not mark
+it as tested or establish whether `reconnect yes` is necessary.
 
 ## How it works
 
