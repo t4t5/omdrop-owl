@@ -65,6 +65,8 @@ and turn it on from the bar.
 | Card | Driver | Status | Tested on |
 |---|---|---|---|
 | MediaTek MT7925 | `mt7925e` | ✅ Shared | Framework 13, `14c3:0717`, Omarchy 4.0.4 (kernel 7.2.5) |
+| Realtek RTL8852CE | `rtw89_8852ce` | ✅ Shared (opt-in) | Legion Slim 5 16AHP9, `10ec:c852`, Omarchy 4.0.4 (kernel 7.2.5) |
+| Realtek RTL8852AE | `rtw89_8852ae` | ✅ Shared (opt-in) | ThinkPad P14s Gen 2a, `10ec:8852`, Ubuntu 26.04.1 (kernel 7.0) |
 | Intel AX200 | `iwlwifi` | ✅ Exclusive | ThinkPad X1 Yoga, `8086:2723`, NixOS 26.05 (kernel 6.19.8) |
 | Intel AX201 | `iwlwifi` | ✅ Exclusive | • Ubuntu 24.04 (kernel 6.8)<br>• CachyOS (kernel 7.2.9) |
 | Intel AX211 | `iwlwifi` | ✅ Exclusive | • ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0)<br>• XPS 9320, `8086:51f0`, Arch (kernel 7.2.3)<br>• Legion Pro 7 16IRX8H, `8086:7a70`, Omarchy 4.0.4 (kernel 7.2.3) |
@@ -77,8 +79,7 @@ and turn it on from the bar.
 | MediaTek MT7922 (RZ616) | `mt7921e` | ❓ Untested (opt-in) | — |
 | Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❓ Untested (opt-in) | — |
 | Qualcomm WCN7850 (FastConnect 7800) | `ath12k` | ❓ Untested (opt-in) | — |
-| Realtek RTL8852AE | `rtw89_8852ae` | ⚠️ Shared: both directions observed; recovery packet loss (opt-in) | ThinkPad P14s Gen 2a, `10ec:8852`, Ubuntu 26.04.1 (kernel 7.0.0-38-generic); iPhone 13 |
-| Realtek RTL8852BE / RTL8852CE | `rtw89_8852be` / `rtw89_8852ce` | ❓ Untested (opt-in) | — |
+| Realtek RTL8852BE | `rtw89_8852be` | ❓ Untested (opt-in) | — |
 | MediaTek MT7612U (USB) | `mt76x2u` | ❓ Untested (opt-in), in progress in [#13](https://github.com/t4t5/omdrop-owl/pull/13) | — |
 
 - ✅ means both directions work
@@ -165,5 +166,8 @@ NetworkManager manages OWL's interfaces and the phone never shows up.
   mt76/firmware bug), so `stop` reconnects Wi-Fi straight after.
 - **The MT7925 sends slower than it receives** (about 490 kB/s against
   1.3 MB/s): injected frames leave at most one every ~2.5 ms.
+- **UFW blocks the receiver**, so the phone never sees this machine. Run
+  `omdrop firewall install` to allow TCP 8771 from link-local addresses on
+  `awdl0`.
 - **Intel cards are slow**, since AWDL on channel 6 gets few of the iPhone's
   slots: a 2.4 MB photo takes 10–17 s on an AX201.
