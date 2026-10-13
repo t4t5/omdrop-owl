@@ -72,6 +72,13 @@ and turn it on from the bar.
 One card name can cover chips that behave differently, so a report from a machine, PCI ID
 (`lspci -nn`) or kernel not listed here helps too.
 
+The Raspberry Pi 4's BCM43455c0 also has an
+[experimental Nexmon integration report](docs/raspberry-pi-nexmon.md), including
+the required firmware fixes, radio lifecycle, and recovery checks. Incoming
+AirDrop was tested with a manually managed radio on Raspberry Pi OS Lite.
+The packaged launcher does not yet implement this backend, and this result
+does not qualify stock `brcmfmac` or a generic `brcmfmac` hardware profile.
+
 ### Adding your card
 
 What omdrop-owl does on each Wi-Fi driver comes from
