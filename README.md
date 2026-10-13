@@ -74,8 +74,9 @@ One card name can cover chips that behave differently, so a report from a machin
 
 The Raspberry Pi 4's BCM43455c0 also has an
 [experimental Nexmon integration report](docs/raspberry-pi-nexmon.md), including
-the required firmware fixes, radio lifecycle, and recovery checks. Incoming
-AirDrop was tested with a manually managed radio on Raspberry Pi OS Lite.
+isolated firmware defects, radio lifecycle, recovery checks, and validation
+limits. Historical incoming-AirDrop tests used a broader experimental firmware
+patch; the narrowed companion firmware PR still needs end-to-end validation.
 The packaged launcher does not yet implement this backend, and this result
 does not qualify stock `brcmfmac` or a generic `brcmfmac` hardware profile.
 

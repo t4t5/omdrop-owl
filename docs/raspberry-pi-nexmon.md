@@ -1,9 +1,17 @@
 # Experimental Raspberry Pi 4 integration with Nexmon
 
-OWL can receive native AirDrop transfers through the Raspberry Pi 4's onboard
-BCM43455c0 with a patched Nexmon driver and firmware. Stock `brcmfmac` rejected
-monitor mode on the tested installation. This report documents the working
-radio configuration and the lifecycle a future backend needs to implement.
+An experimental configuration received native AirDrop transfers through the
+Raspberry Pi 4's onboard BCM43455c0 with a patched Nexmon driver and firmware.
+Stock `brcmfmac` rejected monitor mode on the tested installation. This report
+records that configuration, the independently reproduced firmware defects,
+and the lifecycle a future backend needs to implement.
+
+**Validation status:** the companion Nexmon PR has been narrowed to two
+isolated fixes. Its current diff has passed packet-injection regressions,
+but has not yet passed a new end-to-end AirDrop transfer matrix. The historical
+file-transfer results below used a larger experimental firmware patch. They
+must not be treated as validation of the narrowed PR or as proof that it is
+the complete minimum needed for AirDrop.
 
 The packaged `omdrop-discoverable` launcher currently implements shared mode
 and an IBSS-based exclusive mode. Neither sets up this Nexmon path. Do not mark
@@ -17,24 +25,28 @@ also covers other chips, firmware versions, and unpatched installations.
 | Board | Raspberry Pi 4 Model B Rev 1.1, 2 GB, onboard BCM43455c0 |
 | OS | Raspberry Pi OS Lite 64-bit, Debian 13 |
 | Kernel | `6.18.50+rpt-rpi-v8` |
-| Firmware | `7.45.265 (28bca26 CY)` with the packet ownership fixes below |
+| Firmware | `7.45.265 (28bca26 CY)` with the historical experimental patch below |
 | Nexmon base | `kimocoder/nexmon`, `monitor-injection-k7.2`, `650275abbede65507e5ce3b3c1f417b87da1279d` |
+| Historical combined firmware source | `3aaa5563bf4662973cc3e85ff4e1e88fdb536576` (the earlier, broader revision of the companion draft; not its current diff) |
 | omdrop-owl | `a063387fa8489b206f7d5dd8ed82b79825b1111f` |
 | OWL | The `832d70f815c3d4a06a02117bf0fc5e868daa1ff0` pin plus this repository's patches |
 | Portable discovery tools | omdrop-awdl `534f91a525337951ca19c311e53d333bd6d55100` |
 | Receiver | omdrop-plugin `6af4908310a4fcd1ba7800fcc7b83156bbd7ee77` |
 
 The Nexmon base comes from [upstream PR 692](https://github.com/seemoo-lab/nexmon/pull/692).
-It needs the additional [BCM43455c0/7.45.265 packet handling fixes](https://github.com/kimocoder/nexmon/pull/2)
-before sustained transfers are reliable. In particular, SDIO can deliver a `PKTLINK` batch to
-the injection hook; processing only the head strands the remaining buffers.
+The [companion firmware PR](https://github.com/kimocoder/nexmon/pull/2) now
+addresses two independently reproduced defects: processing only the first
+packet in an SDIO `PKTLINK` batch, and an unmatched MAC-resume call during
+monitor setup. Processing only the batch head strands the remaining buffers.
 The observed result was an exhausted packet pool and a closed SDPCM credit
 window, with both transfers and firmware control requests stalled.
 
-The tested firmware also removes unmatched MAC-resume calls, preserves packet
-allocation ownership, and uses the target firmware's RX handoff and release
-paths. Keep these firmware changes in Nexmon. A userspace restart cannot
-repair firmware that has already lost its packet buffers.
+The earlier file-transfer build also changed TX allocation flags, RAM
+allocation/free wrappers, RX handoff, invalid-copy cleanup, and A-MSDU cleanup,
+and removed a per-frame MAC-resume call. Those changes are excluded from the
+narrowed PR because their necessity for the isolated defects was not shown.
+Their contribution to end-to-end transfers remains unqualified. Keep firmware
+fixes in Nexmon; a userspace restart cannot repair lost firmware buffers.
 
 ## Build and staging requirements
 
@@ -153,7 +165,31 @@ reactivate the saved connection UUID when available. This also needs to work
 after a partially completed startup. The tested teardown restored normal
 Wi-Fi without replacing the stock files.
 
-## Transfer evidence and limits
+## Isolated firmware evidence
+
+A controlled test replayed a fixed 296-byte radiotap/OWL action frame 256 times,
+in batches of four separated by 10 ms, after a fresh radio load. The frame was
+reused with the session MAC updated. Automatic recovery was disabled, the same
+driver and userspace configuration were retained, and the receiver window
+remained at 8192 bytes. Buffer counts and firmware-console errors were checked
+before injection and at approximately 1, 4, and 9 seconds afterward.
+
+- Removing only batch processing from the combined firmware drained the pool
+  from 33 buffers to zero in repeated runs. Full controls recovered to 33.
+- Restoring only the monitor-setup MAC-resume call reproduced watchdog
+  reinitialization, including `wlc_watchdog: need to reinit() 4, Big Hammer`.
+  Restoring only the per-frame call did not reproduce that fault in this test.
+- A reduced build with only batch processing and monitor-setup resume removal
+  recovered its buffers and showed no fatal restart in repeated runs.
+- Individually removing the other allocation/RX changes did not reproduce
+  either defect under this test. This does not establish their irrelevance to
+  workloads that the injection test does not cover.
+
+The initial unpaced burst could produce transmit-drop messages even in the
+full control. Those messages were not used to attribute either fix. The paced
+comparison above avoided that overload.
+
+## Historical transfer evidence and limits
 
 - Four consecutive rounds of nine incoming files: **36/36 successful**, about
   **65.3 MB** total, without restarting the radio. The matrix covered JPEG,
@@ -171,13 +207,20 @@ Wi-Fi without replacing the stock files.
   verifying that the supervisor recreated the radio and restored mode 2.
   Subsequent healthy checks left that radio session unchanged.
 
-These measurements used the combined firmware changes and a receiver listener
+These historical measurements used the larger combined firmware patch and a receiver listener
 with `SO_RCVBUF` and Linux `TCP_WINDOW_CLAMP` set to 8192 bytes. That optional
 receiver change is a separate concern and is not supplied by this guide.
 The tests do not isolate the benefit of each supporting firmware change or
 establish performance with the default receive window.
 
-Only incoming AirDrop on this Pi 4/kernel/firmware combination was qualified.
-Outgoing transfers, Contacts Only, other Pi models or firmware versions, and
-the packaged launcher's full lifecycle remain unqualified. The guide is a
-starting point for an explicit Nexmon backend, not a universal driver profile.
+The new file-transfer controls encountered a Mac AWDL discovery/routing failure
+before upload, including with the saved previously working firmware. That
+prevented an end-to-end comparison of the reduced patch. The injection results
+do not resolve that blocker or qualify following this guide with only the
+narrowed companion PR.
+
+Only incoming AirDrop on the historical Pi 4/kernel/combined-firmware setup was
+qualified. Outgoing transfers, Contacts Only, other Pi models or firmware
+versions, and the packaged launcher's full lifecycle remain unqualified. The
+guide is a starting point for an explicit Nexmon backend, not a universal
+driver profile.
