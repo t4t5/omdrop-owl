@@ -7,11 +7,11 @@ records that configuration, the independently reproduced firmware defects,
 and the lifecycle a future backend needs to implement.
 
 **Validation status:** the companion Nexmon PR has been narrowed to two
-isolated fixes. Its current diff has passed packet-injection regressions,
-but has not yet passed a new end-to-end AirDrop transfer matrix. The historical
-file-transfer results below used a larger experimental firmware patch. They
-must not be treated as validation of the narrowed PR or as proof that it is
-the complete minimum needed for AirDrop.
+isolated fixes. Its current diff passed packet-injection regressions and
+18 incoming Mac protocol transfers across two fresh radio loads on channel 6.
+The historical native Finder/iPhone results used a larger firmware patch.
+Those native results must not be attributed to the narrowed PR; the tests
+also do not establish the complete minimum for every AirDrop workload.
 
 The packaged `omdrop-discoverable` launcher currently implements shared mode
 and an IBSS-based exclusive mode. Neither sets up this Nexmon path. Do not mark
@@ -25,8 +25,9 @@ also covers other chips, firmware versions, and unpatched installations.
 | Board | Raspberry Pi 4 Model B Rev 1.1, 2 GB, onboard BCM43455c0 |
 | OS | Raspberry Pi OS Lite 64-bit, Debian 13 |
 | Kernel | `6.18.50+rpt-rpi-v8` |
-| Firmware | `7.45.265 (28bca26 CY)` with the historical experimental patch below |
+| Firmware | `7.45.265 (28bca26 CY)` with either the reduced patch or the historical combined patch, as identified per test below |
 | Nexmon base | `kimocoder/nexmon`, `monitor-injection-k7.2`, `650275abbede65507e5ce3b3c1f417b87da1279d` |
+| Reduced firmware source | `996726c133d7eee39396d9864b33eb2f6c41a67b` in the companion Nexmon PR |
 | Historical combined firmware source | `3aaa5563bf4662973cc3e85ff4e1e88fdb536576` (the earlier, broader revision of the companion draft; not its current diff) |
 | omdrop-owl | `a063387fa8489b206f7d5dd8ed82b79825b1111f` |
 | OWL | The `832d70f815c3d4a06a02117bf0fc5e868daa1ff0` pin plus this repository's patches |
@@ -45,8 +46,10 @@ The earlier file-transfer build also changed TX allocation flags, RAM
 allocation/free wrappers, RX handoff, invalid-copy cleanup, and A-MSDU cleanup,
 and removed a per-frame MAC-resume call. Those changes are excluded from the
 narrowed PR because their necessity for the isolated defects was not shown.
-Their contribution to end-to-end transfers remains unqualified. Keep firmware
-fixes in Nexmon; a userspace restart cannot repair lost firmware buffers.
+The reduced patch subsequently passed the bounded transfer matrix below.
+This supports omitting those changes for that workload, without establishing
+their irrelevance to all workloads. Keep firmware fixes in Nexmon; a userspace
+restart cannot repair lost firmware buffers.
 
 ## Build and staging requirements
 
@@ -104,14 +107,16 @@ A packaged backend still needs to own these steps and their failure cleanup.
    ip link set "$STA" up
    iw phy "$PHY" interface add mon0 type monitor
    ip link set mon0 up
-   "$NEXUTIL" -I "$STA" -k149/20
-   "$OWL" -i mon0 -c 149 -N -S pin -F -E -f -m "$MAC"
+   "$NEXUTIL" -I "$STA" -k6/20
+   "$OWL" -i mon0 -c 6 -N -S pin -F -E -f -m "$MAC"
    ```
 
    OWL runs in the foreground here; a supervisor must own its lifetime.
-   The tested setup uses fixed channel 149 at 20 MHz and no IBSS interface.
-   Use a channel permitted by the local regulatory domain. Other channels
-   were not qualified in this test. `-f` disables OWL's peer RSSI cutoff;
+   The current setup uses fixed channel 6 at 20 MHz and no IBSS interface.
+   The historical transfer matrix used channel 149; a later discovery failure
+   on that channel was reproduced with the same firmware, while switching to
+   6 restored discovery. See the channel comparison below. Use a channel
+   permitted by the local regulatory domain. `-f` disables OWL's peer RSSI cutoff;
    the default cutoff discarded the test peer at ordinary indoor range.
 
 4. Once OWL has created `awdl0`, run the following from the supervising
@@ -121,7 +126,7 @@ A packaged backend still needs to own these steps and their failure cleanup.
    ip link set "$STA" up
    iw dev "$STA" set power_save off
    "$NEXUTIL" -I "$STA" -m2
-   "$NEXUTIL" -I "$STA" -k149/20
+   "$NEXUTIL" -I "$STA" -k6/20
    ```
 
    Reasserting 20 MHz matters: OWL's initial channel request used HT40+.
@@ -189,6 +194,44 @@ The initial unpaced burst could produce transmit-drop messages even in the
 full control. Those messages were not used to attribute either fix. The paced
 comparison above avoided that overload.
 
+## Discovery channel comparison
+
+With the saved combined firmware, both a Mac and a nearby iPhone stopped
+discovering the receiver on channel 149, despite responsive firmware control
+queries, incoming peer action frames, and running receiver/advertisers.
+Restarting the stack and changing the advertised channel-sequence strategy
+did not restore Mac discovery on 149.
+
+A 6 → 149 → 6 comparison kept the firmware and userspace options fixed apart
+from the configured channel, with a fresh radio session each time. Both runs
+on 6 produced Mac Bonjour discovery and a pinned-TLS AirDrop `/Discover` HTTP
+200 response; the intervening 149 run had no usable AWDL route and timed out
+before TLS. This supports channel 6 as the current workaround. It does not
+isolate the underlying 5 GHz failure or establish recovery on the iPhone.
+
+## Current reduced-patch transfer evidence
+
+On channel 6 / 20 MHz, the exact reduced source revision above passed
+**18/18 incoming transfers across two independent radio loads**, approximately
+**32.7 MB** total. Each load covered JPEG, HEIC, and PNG at 480×640, 1200×1600,
+and 3024×4032 pixels, approximately 26 KB–6.6 MB per file. The combined reference
+firmware passed the same nine-file matrix once, approximately **16.3 MB**.
+Every received size and SHA-256 matched. Radio processes remained unchanged
+within each round, packet pools returned to 33 available buffers, and no
+firmware fatal/reinitialization messages appeared.
+
+Driver and userspace settings were fixed, automatic recovery was disabled,
+and the receiver window remained at 8192 bytes. The sender used macOS
+Network.framework peer-to-peer policy, pinned TLS, and AirDrop
+Discover/Ask/Upload with DVZip/CPIO. These are actual AWDL transfers, but do not
+constitute new native Finder/iPhone UI tests with the reduced firmware.
+
+An initial channel-6 control exceeded the previous 20-second sender timeout
+and was cancelled; it is retained as a failed attempt. Completed rounds used
+the same 180-second timeout for both variants. The reference's largest file
+took approximately 69 seconds. This configuration favors reachability over
+the historical channel-149 transfer speed; it is not a performance benchmark.
+
 ## Historical transfer evidence and limits
 
 - Four consecutive rounds of nine incoming files: **36/36 successful**, about
@@ -213,14 +256,13 @@ receiver change is a separate concern and is not supplied by this guide.
 The tests do not isolate the benefit of each supporting firmware change or
 establish performance with the default receive window.
 
-The new file-transfer controls encountered a Mac AWDL discovery/routing failure
-before upload, including with the saved previously working firmware. That
-prevented an end-to-end comparison of the reduced patch. The injection results
-do not resolve that blocker or qualify following this guide with only the
-narrowed companion PR.
+The initial channel-149 discovery/routing failure blocked fresh transfer
+controls even with the saved firmware. Channel 6 enabled the current reduced
+patch comparison above; it did not establish the cause of the 5 GHz failure.
 
-Only incoming AirDrop on the historical Pi 4/kernel/combined-firmware setup was
-qualified. Outgoing transfers, Contacts Only, other Pi models or firmware
-versions, and the packaged launcher's full lifecycle remain unqualified. The
-guide is a starting point for an explicit Nexmon backend, not a universal
-driver profile.
+Current reduced-patch evidence covers incoming Mac protocol transfers on this
+Pi/kernel combination. New native Finder/iPhone transfers with the reduced
+firmware, outgoing transfers, Contacts Only, other Pi models or firmware
+versions, default receive-window behavior, and the packaged launcher's full
+lifecycle remain unqualified. The guide is a starting point for an explicit
+Nexmon backend, not a universal driver profile.
