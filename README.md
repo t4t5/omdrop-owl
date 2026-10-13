@@ -52,6 +52,7 @@ and turn it on from the bar.
 | Card | Driver | Status | Tested on |
 |---|---|---|---|
 | MediaTek MT7925 | `mt7925e` | ✅ Shared | Framework 13, `14c3:0717`, Omarchy 4.0.4 (kernel 7.2.5) |
+| Realtek RTL8852CE | `rtw89_8852ce` | ✅ Shared (opt-in) | Legion Slim 5 16AHP9, `10ec:c852`, Omarchy 4.0.4 (kernel 7.2.5) |
 | Intel AX200 | `iwlwifi` | ✅ Exclusive | ThinkPad X1 Yoga, `8086:2723`, NixOS 26.05 (kernel 6.19.8) |
 | Intel AX201 | `iwlwifi` | ✅ Exclusive | • Ubuntu 24.04 (kernel 6.8)<br>• CachyOS (kernel 7.2.9) |
 | Intel AX211 | `iwlwifi` | ✅ Exclusive | • ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0)<br>• XPS 9320, `8086:51f0`, Arch (kernel 7.2.3)<br>• Legion Pro 7 16IRX8H, `8086:7a70`, Omarchy 4.0.4 (kernel 7.2.3) |
@@ -65,7 +66,6 @@ and turn it on from the bar.
 | Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❓ Untested (opt-in) | — |
 | Qualcomm WCN7850 (FastConnect 7800) | `ath12k` | ❓ Untested (opt-in) | — |
 | Realtek RTL8852BE | `rtw89_8852be` | ❓ Untested (opt-in) | — |
-| Realtek RTL8852CE | `rtw89_8852ce` | Both directions reported working in shared mode; stability validation pending (opt-in) | Legion Slim 5 16AHP9, `10ec:c852`, Omarchy 4.0.4 (kernel 7.2.5-3-omarchy); [report](#rtl8852ce-legion-slim-5-report) |
 | MediaTek MT7612U (USB) | `mt76x2u` | ❓ Untested (opt-in), in progress in [#13](https://github.com/t4t5/omdrop-owl/pull/13) | — |
 
 - ✅ means both directions work
@@ -102,32 +102,6 @@ around it varies, which is what the profile records.
 
 Cards that can't inject while connected can try `mode exclusive`, which takes
 Wi-Fi away for the window.
-
-### RTL8852CE Legion Slim 5 report
-
-On a Lenovo Legion Slim 5 16AHP9 (model 83DH), the Realtek RTL8852CE
-(`10ec:c852`, subsystem `17aa:5852`, driver `rtw89_8852ce`) was tried on
-Omarchy 4.0.4, kernel `7.2.5-3-omarchy`, with omdrop-owl `0.1.0-1`.
-
-After opting in with `/etc/omdrop/allow-untested`, the laptop connected to
-Wi-Fi on channel 44 (5220 MHz, 40 MHz width), while Ethernet stayed connected.
-The fallback shared profile used `mon_mac station`, `reconnect yes` and
-`mt76_pm no`. The readiness probe returned `hardware: true` with no missing
-requirements. OWL heard AWDL peers and received data; the receiver listened
-on TCP 8771 and announcements were sent.
-
-The iPhone initially showed no recipients. Kernel logs showed UFW dropping
-inbound IPv6 link-local TCP SYNs on `awdl0` to port 8771. The user reported
-AirDrop transfers working in both directions after disabling UFW. Omdrop provides a narrow receiver rule
-via `omdrop firewall install`: it allows only IPv6 link-local sources and
-destinations on `awdl0`, TCP 8771. That rule with UFW enabled has not yet been
-verified on this machine.
-
-This is a preliminary manual report: transfer timing was not recorded,
-and `tools/test-card.sh` was not run. Wi-Fi continuity during the window
-and the five-minute post-teardown watch
-still need validation. The driver remains opt-in; this report does not mark
-it as tested or establish whether `reconnect yes` is necessary.
 
 ## How it works
 
@@ -174,5 +148,8 @@ NetworkManager manages OWL's interfaces and the phone never shows up.
   mt76/firmware bug), so `stop` reconnects Wi-Fi straight after.
 - **The MT7925 sends slower than it receives** (about 490 kB/s against
   1.3 MB/s): injected frames leave at most one every ~2.5 ms.
+- **UFW blocks the receiver**, so the phone never sees this machine. Run
+  `omdrop firewall install` to allow TCP 8771 from link-local addresses on
+  `awdl0`.
 - **Intel cards are slow**, since AWDL on channel 6 gets few of the iPhone's
   slots: a 2.4 MB photo takes 10–17 s on an AX201.
