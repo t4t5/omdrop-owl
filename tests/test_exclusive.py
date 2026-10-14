@@ -13,11 +13,15 @@ class ExclusiveTests(unittest.TestCase):
     def run_case(self, extra='', fallback=True, join=True):
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ, RUN=tmp, FALLBACK=str(int(fallback)), JOIN=str(int(join)))
+            # Whoever runs the tests through sudo must not make them call the real runuser.
+            env.pop('SUDO_UID', None)
+            env.pop('PKEXEC_UID', None)
             script = r'''
 set -uo pipefail
 IBSS=awdlibss0
 MON=mon0
 AWDL_BSSID=00:25:00:ff:94:73
+RECONNECT_WAIT=3
 log() { echo "log $*" >> "$RUN/commands"; }
 knob() { :; }
 nmcli() {
@@ -158,6 +162,86 @@ exclusive_down || exit 11
 ''')
         self.assertIn('iw dev wlan0 set type managed', out)
         self.assertIn('nmcli device set wlan0 managed yes', out)
+
+    def test_unreconnected_station_gets_its_recorded_connection_up(self):
+        # A connection with autoconnect off: NetworkManager never brings it back (#51).
+        out = self.run_case('''exclusive_up wlan0 phy0 2437 || exit 10
+nmcli() { echo "nmcli $*" >> "$RUN/commands"; }
+exclusive_down || exit 11
+''', fallback=False)
+        self.assertNotIn('set type', out)
+        # Recorded at start, then polled for RECONNECT_WAIT seconds.
+        self.assertEqual(out.count('nmcli -g GENERAL.CON-UUID device show wlan0'), 4)
+        self.assertIn('connection up uuid 12345678-1234-1234-1234-123456789abc ifname wlan0', out)
+        self.assertLess(out.index('nmcli device set wlan0 managed yes'), out.index('connection up uuid'))
+
+    def test_networkmanager_reconnecting_late_is_left_alone(self):
+        out = self.run_case('''exclusive_up wlan0 phy0 2437 || exit 10
+nmcli() {
+  echo "nmcli $*" >> "$RUN/commands"
+  if [[ "$*" == '-g GENERAL.CON-UUID device show wlan0' ]]; then
+    echo poll >> "$RUN/polls"
+    [[ $(wc -l < "$RUN/polls") -lt 2 ]] || echo 12345678-1234-1234-1234-123456789abc
+  fi
+}
+exclusive_down || exit 11
+[[ $(wc -l < "$RUN/polls") == 2 ]] || exit 12
+''', fallback=False)
+        self.assertNotIn('connection up', out)
+
+    def test_unreconnected_station_retries_are_bounded(self):
+        out = self.run_case('''exclusive_up wlan0 phy0 2437 || exit 10
+attempts=0
+nmcli() {
+  echo "nmcli $*" >> "$RUN/commands"
+  if [[ "$*" == '-w 10 connection up uuid '* ]]; then
+    attempts=$((attempts + 1)); return 1
+  fi
+}
+exclusive_down || exit 11
+[[ "$attempts" == 3 ]] || exit 12
+''', fallback=False)
+        self.assertIn("didn't reconnect", out)
+
+    def test_disconnected_unconverted_station_is_not_waited_for(self):
+        out = self.run_case('''exclusive_up wlan0 phy0 2437 || exit 10
+printf '%s' -- > "$RUN/connection"
+nmcli() { echo "nmcli $*" >> "$RUN/commands"; }
+exclusive_down || exit 11
+''', fallback=False)
+        self.assertEqual(out.count('GENERAL.CON-UUID'), 1)
+        self.assertNotIn('connection up uuid', out)
+
+    CALLER = '''exclusive_up wlan0 phy0 2437 || exit 10
+nmcli() { echo "nmcli $*" >> "$RUN/commands"; }
+id() { [[ "$*" == '-nu 1000' ]] && echo alice; }
+runuser() { echo "runuser $*" >> "$RUN/commands"; return "$RUNUSER_RC"; }
+PKEXEC_UID=1000
+'''
+
+    def test_reconnect_asks_as_the_caller_for_their_stored_password(self):
+        # psk-flags 1 (KWallet, GNOME Keyring): only the caller's secret agent has the password.
+        out = self.run_case(self.CALLER + 'RUNUSER_RC=0\nexclusive_down || exit 11', fallback=False)
+        self.assertIn('runuser -u alice -- nmcli -w 10 connection up uuid '
+                      '12345678-1234-1234-1234-123456789abc ifname wlan0', out)
+        self.assertNotIn('\nnmcli -w 10 connection up', out)
+
+    def test_reconnect_falls_back_to_root_for_a_system_password(self):
+        out = self.run_case(self.CALLER + 'RUNUSER_RC=1\nexclusive_down || exit 11', fallback=False)
+        self.assertIn('runuser -u alice', out)
+        self.assertIn('\nnmcli -w 10 connection up uuid 12345678-1234-1234-1234-123456789abc ifname wlan0', out)
+
+    def test_reconnect_asks_as_the_sudo_user_too(self):
+        # tools/test-card.sh runs the helper through sudo, not pkexec.
+        out = self.run_case(self.CALLER.replace('PKEXEC_UID=1000', 'SUDO_UID=1000')
+                            + 'RUNUSER_RC=0\nexclusive_down || exit 11', fallback=False)
+        self.assertIn('runuser -u alice -- nmcli -w 10 connection up uuid', out)
+
+    def test_root_caller_reconnects_without_runuser(self):
+        out = self.run_case(self.CALLER.replace('PKEXEC_UID=1000', 'PKEXEC_UID=0')
+                            + 'RUNUSER_RC=0\nexclusive_down || exit 11', fallback=False)
+        self.assertNotIn('runuser', out)
+        self.assertIn('nmcli -w 10 connection up uuid', out)
 
 if __name__ == '__main__':
     unittest.main()

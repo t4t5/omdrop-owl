@@ -1,6 +1,7 @@
 # The upstream commits omdrop-owl builds from. tools/build-owl.sh and
 # tools/stage.sh read these; PKGBUILD repeats them (makepkg needs literals) and
-# checks in prepare() that the two agree.
+# checks in prepare() that the two agree. nix/package.nix reads them too, but
+# its hashes must be updated with them (the build reports the new hash).
 #
 # OWL, from the airdrop-mt7921 fork: its -S channel-sequence strategies and
 # its fixes for iOS 26. patches/owl-*.patch apply to this commit.

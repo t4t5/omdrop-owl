@@ -1,0 +1,16 @@
+# udev must not give awdl0 a MAC address of its own.
+#
+# OWL brings awdl0 up with the AWDL address, and the kernel derives awdl0's
+# IPv6 link-local from it. systemd's 99-default.link (MACAddressPolicy=
+# persistent) can then replace the MAC after the link-local exists: it does on
+# Ubuntu 22.04 (systemd 249). omdrop then announces a link-local computed from
+# the new MAC, an address awdl0 doesn't have, and the phone never connects.
+#
+# The first .link file that matches applies, so this one sorts before
+# 99-default.link. Override it with a file of the same name in
+# /etc/systemd/network/.
+[Match]
+OriginalName=awdl0
+
+[Link]
+MACAddressPolicy=none

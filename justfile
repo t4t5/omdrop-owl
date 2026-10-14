@@ -20,3 +20,13 @@ test-aur:
 # Test this computer's card against build/lib and write a report (README, "Adding your card")
 test *ARGS: build
     sudo tools/test-card.sh --lib build/lib {{ARGS}}
+
+# Preview README as GitHub renders it (dark by default; `just readme-preview light`)
+readme-preview theme="dark":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out=.readme-preview.html
+    # Export next to the README so relative image paths keep working.
+    uvx grip --export --quiet --user "$(gh api user --jq .login)" --pass "$(gh auth token)" README.md "$out"
+    sed -i 's|<html lang="en">|<html lang="en" data-color-mode="{{theme}}" data-{{theme}}-theme="{{theme}}">|' "$out"
+    xdg-open "$out"

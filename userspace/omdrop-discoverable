@@ -60,7 +60,11 @@ ADV_INTERVAL=3
 # window, for a whole period of sixteen slots.
 ADV_BURST="--count 3 --interval 0.05"
 ADV_BURST_EXCLUSIVE="--count 64 --interval 0.0164"
-VERSION=0.1.0
+# After an exclusive window, how long NetworkManager gets to reconnect the
+# station by itself before stop brings the recorded connection up. Autoconnect
+# took 3 s on an AX211; a connection with autoconnect off never comes back.
+RECONNECT_WAIT=10
+VERSION=0.1.1
 # The omdrop-awdl helper contract this follows, which is also the version of
 # omdrop-awdl's tools staged beside it.
 CONTRACT=0.8.1
@@ -178,7 +182,7 @@ exclusive_up() {  # STA PHY FREQ...
   local sta=$1 phy=$2 f cell=$IBSS
   shift 2
   echo "$sta" > "$RUN/exclusive"
-  # Only a converted station needs it, but it has to be read while connected.
+  # What stop reconnects to; it has to be read while connected.
   nmcli -g GENERAL.CON-UUID device show "$sta" > "$RUN/connection" 2>/dev/null
   nmcli device set "$sta" managed no >/dev/null 2>&1
   ip link set "$sta" down
@@ -211,6 +215,31 @@ exclusive_up() {  # STA PHY FREQ...
   return 1
 }
 
+# Whether NetworkManager reconnects station $1 by itself within RECONNECT_WAIT
+# seconds, to any connection.
+nm_reconnects() {
+  local _
+  for _ in $(seq "$RECONNECT_WAIT"); do
+    [ -n "$(nmcli -g GENERAL.CON-UUID device show "$1" 2>/dev/null)" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# Brings connection $1 up on station $2. A password kept per user (KDE's KWallet,
+# GNOME Keyring: psk-flags 1) is only handed to that user's secret agent, so
+# root's own request fails with "Secrets were required"; ask as the user who
+# ran pkexec or sudo first, then as root for a system-wide password.
+connection_up() {  # UUID STA
+  local user=
+  [ -n "${PKEXEC_UID:-${SUDO_UID:-}}" ] && user=$(id -nu "${PKEXEC_UID:-$SUDO_UID}" 2>/dev/null)
+  if [ -n "$user" ] && [ "$user" != root ] &&
+    runuser -u "$user" -- nmcli -w 10 connection up uuid "$1" ifname "$2" >/dev/null 2>&1; then
+    return 0
+  fi
+  nmcli -w 10 connection up uuid "$1" ifname "$2" >/dev/null 2>&1
+}
+
 # The active-monitor radio (PR #13, kmod-midori), for cards with no ad-hoc
 # mode. mon0 is an active monitor, which ACKs unicast to its own address, so
 # it carries the station's MAC and stands in for the cell; OWL injects through
@@ -237,10 +266,12 @@ monitor_up() {  # STA PHY FREQ...
   return 1
 }
 
-# NetworkManager reconnects by itself once it has the station back, except a
-# converted one: it can still find that unavailable for a moment, and then
-# leaves it, so that one is reconnected explicitly, up to three times. A
-# station that was a monitor (monitor_up) is treated the same way.
+# NetworkManager reconnects by itself once it has the station back, if the
+# connection has autoconnect on. Otherwise nothing would, so a station it
+# hasn't reconnected within RECONNECT_WAIT gets the connection recorded at
+# start brought up explicitly. A converted one, or one that was a monitor
+# (monitor_up), gets it straight away: it can still find that unavailable for a
+# moment, and then leaves it. Up to three tries either way.
 # Fails, keeping the state for the next stop or start, only if a converted
 # station can't be made a station again. `stop` deletes mon0 before this.
 exclusive_down() {
@@ -267,9 +298,10 @@ exclusive_down() {
   uuid=$(cat "$RUN/connection" 2>/dev/null)
   rm -f "$RUN/exclusive" "$RUN/converted" "$RUN/monitor" "$RUN/connection"
   # Not connected at start ("--" or empty): nothing to reconnect to.
-  [ "$converted" = yes ] && [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] || return 0
+  [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] || return 0
+  [ "$converted" = yes ] || ! nm_reconnects "$sta" || return 0
   for _ in 1 2 3; do
-    nmcli -w 10 connection up uuid "$uuid" ifname "$sta" >/dev/null 2>&1 && return 0
+    connection_up "$uuid" "$sta" && return 0
     sleep 1
   done
   log "$sta is a station again, but didn't reconnect to $uuid"
@@ -411,7 +443,8 @@ cmd_stop() {
 
 # ---------------------------------------------------------------------- start
 
-# The background half of a window: announce, watch OWL, end at expiry.
+# The background half of a window: announce, watch OWL and the monitor
+# interface, end at expiry.
 supervise() {
   local until burst=$ADV_BURST
   [ -e "$RUN/exclusive" ] && burst=$ADV_BURST_EXCLUSIVE
@@ -424,6 +457,14 @@ supervise() {
     if ! alive "$(pid_of owl)" "$OWL_BIN"; then
       log "OWL exited: $(tail -1 "$OWL_LOG" 2>/dev/null)"
       exec "$SELF" stop owl-exited
+    fi
+    # A driver that reloads (iwlwifi after a firmware crash) takes the monitor
+    # interface with it. OWL stays up, failing every injection, and awdl0
+    # keeps its address, so status went on reporting a dead window as visible
+    # (#23).
+    if ! ip link show "$MON" >/dev/null 2>&1; then
+      log "$MON is gone; the driver may have reloaded"
+      exec "$SELF" stop radio-lost
     fi
     python3 "$LIB/awdl-airdrop-adv.py" --iface "$IF" --plain --flags "$ADV_FLAGS" --port 8771 \
       $burst >> "$RUN/announce.log" 2>&1
@@ -454,7 +495,8 @@ cmd_start() {
     cmd_stop recovered >/dev/null
     [ -e "$RUN/converted" ] || [ -e "$RUN/monitor" ] && die "Wi-Fi ($(cat "$RUN/exclusive")) is still set up for the last window and couldn't be switched back. Restarting the computer fixes it." 4
   fi
-  rm -f "$RUN/reason"
+  # The last window's, which a stop after a failed start would act on.
+  rm -f "$RUN/reason" "$RUN/profile" "$RUN/station" "$RUN/pm"
 
   sta=$(station_iface)
   [ -n "$sta" ] || die "no Wi-Fi interface to run AWDL on" 4
@@ -469,6 +511,8 @@ cmd_start() {
     active-monitor) problem=$(active_monitor_problem "$phy"); [ -z "$problem" ] || die "$problem" 4 ;;
     *) die "this Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet" 4 ;;
   esac
+  # Before anything that can fail into cmd_stop, which reads reconnect from it.
+  echo "$drv $PROF_MODE $PROF_MONMAC $PROF_RECONNECT $PROF_PM" > "$RUN/profile"
   if [ "$PROF_MODE" != shared ]; then
     gw=none
     freqs=$(tx_channels "$phy")
@@ -497,7 +541,6 @@ cmd_start() {
   esac
   stamac=$(cat "/sys/class/net/$sta/address")
   echo "$sta" > "$RUN/station"
-  echo "$drv $PROF_MODE $PROF_MONMAC $PROF_RECONNECT $PROF_PM" > "$RUN/profile"
   log "station $sta ($stamac, $drv) on ch$chan, gateway $gw; profile: mode=$PROF_MODE mon_mac=$PROF_MONMAC reconnect=$PROF_RECONNECT mt76_pm=$PROF_PM"
 
   # An active monitor's mon0 is up already (monitor_up).

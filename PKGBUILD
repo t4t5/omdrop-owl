@@ -9,7 +9,7 @@
 # release tagged v${pkgver} instead of the files beside it. Bumping pkgver or
 # pkgrel on main publishes it (.github/workflows/release.yml).
 pkgname=omdrop-owl
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="AirDrop radio backend for omdrop on non-Broadcom Wi-Fi: AWDL in userspace through OWL"
 arch=('x86_64' 'aarch64')
@@ -89,6 +89,8 @@ package() {
     "${pkgdir}/usr/share/polkit-1/actions/io.github.t4t5.omdrop-owl.policy"
   install -Dm644 "${tree}/packaging/99-omdrop-owl-unmanaged.conf" \
     "${pkgdir}/usr/lib/NetworkManager/conf.d/99-omdrop-owl-unmanaged.conf"
+  install -Dm644 "${tree}/packaging/10-omdrop-owl-awdl0.link" \
+    "${pkgdir}/usr/lib/systemd/network/10-omdrop-owl-awdl0.link"
   install -Dm644 "${tree}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
   install -Dm644 owl/COPYING "${pkgdir}/usr/share/licenses/${pkgname}/OWL-GPL-3.0"
   install -Dm644 omdrop-awdl/LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/omdrop-awdl-LICENSE"

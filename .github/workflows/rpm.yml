@@ -1,0 +1,46 @@
+# Builds the Fedora rpm (tools/build-rpm.sh), checks it installs what PKGBUILD
+# does, and runs the OWL patch tests against the tree it patched. On pull
+# requests, only when a file the build or those tests read changed: most of the
+# job is dnf installing a toolchain, which a README change can't break.
+name: RPM
+
+on:
+  pull_request:
+    paths:
+      - PKGBUILD
+      - pins
+      - patches/**
+      - packaging/**
+      - userspace/**
+      - tools/build-owl.sh
+      - tools/stage.sh
+      - tools/build-rpm.sh
+      - tools/check-rpm.sh
+      - tests/owl_*.c
+      - tests/test_owl_*.py
+      - .github/workflows/rpm.yml
+  push:
+    branches: [main]
+
+jobs:
+  rpm:
+    runs-on: ubuntu-latest
+    # Pinned, so a new Fedora release changes this job in a commit of its own.
+    container: fedora:44
+    steps:
+      - uses: actions/checkout@v4
+      # Without weak deps (and with git-core, not git's perl and docs) this is
+      # about half the download.
+      - name: Install the build toolchain
+        run: dnf install -y --setopt=install_weak_deps=False rpm-build git-core gcc gcc-c++ cmake make libev-devel libpcap-devel libnl3-devel python3 libasan
+      - name: Build the rpm
+        run: tools/build-rpm.sh
+      - name: Check the rpm against the PKGBUILD
+        run: tools/check-rpm.sh omdrop-owl-*.rpm
+      - name: OWL patch tests
+        # Here, not in CI's test job: it needs the OWL tree build-rpm.sh just
+        # patched, and a skip would hide that it didn't run.
+        run: |
+          python3 -m unittest -v tests/test_owl_amsdu.py tests/test_owl_padding.py 2> owl.log || { cat owl.log; exit 1; }
+          cat owl.log
+          ! grep -q skipped owl.log

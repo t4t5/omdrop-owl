@@ -3,13 +3,11 @@
 https://github.com/user-attachments/assets/b195ce4c-e078-49be-bc13-44a72b6dc189
 
 AirDrop between iPhones and Linux laptops whose Wi-Fi isn't Apple's Broadcom
-chip. Pairs with [omdrop](https://github.com/brentkearney/omdrop-plugin).
+chip. Pairs with [omdrop](https://github.com/netmojo-systems/omdrop-plugin).
 
 See [supported hardware](#supported-hardware).
 
 ## Install
-
-Install this package (omdrop-owl) first, then [omdrop](https://github.com/brentkearney/omdrop-plugin).
 
 On Arch/Omarchy ([AUR](https://aur.archlinux.org/packages/omdrop-owl)):
 
@@ -22,7 +20,7 @@ yay -S omdrop-owl
 
 ```sh
 sudo apt install build-essential cmake git pkg-config dpkg-dev \
-  libev-dev libpcap-dev libnl-3-dev libnl-genl-3-dev
+  libev-dev libpcap-dev libnl-3-dev libnl-genl-3-dev libnl-route-3-dev
 tools/build-deb.sh
 sudo apt install ./omdrop-owl_*.deb
 ```
@@ -30,45 +28,98 @@ sudo apt install ./omdrop-owl_*.deb
 This builds OWL at the commit pinned in `pins`, with `patches/`,
 and installs it root-owned into `/usr/lib/omdrop` together with
 `omdrop-discoverable` and omdrop-awdl's portable tools, a polkit policy for the
-helper, and a NetworkManager rule keeping `awdl0`, `mon0` and `awdlibss0`
-unmanaged. It conflicts with `brcmfmac-awdl-dkms`: one radio backend at a time.
+helper, a NetworkManager rule keeping `awdl0`, `mon0` and `awdlibss0`
+unmanaged, and a systemd `.link` file that keeps udev from changing `awdl0`'s
+MAC address. It conflicts with `brcmfmac-awdl-dkms`: one radio backend at a time.
 
 </details>
 
-Then install omdrop (0.16.0 or newer):
+<details>
+<summary>On Fedora (from source)</summary>
 
 ```sh
-omarchy plugin add https://github.com/brentkearney/omdrop-plugin.git
+sudo dnf install rpm-build cmake gcc gcc-c++ make git libev-devel libpcap-devel libnl3-devel
+tools/build-rpm.sh
+sudo dnf install ./omdrop-owl-*.rpm
+```
+
+This builds the same files as the Debian package into an `.rpm` (Fedora package names;
+other rpm-based distros would rename them). `sudo dnf remove omdrop-owl` removes them all.
+</details>
+
+<details>
+<summary>On NixOS (flake)</summary>
+
+```nix
+inputs.omdrop-owl.url = "github:t4t5/omdrop-owl";
+```
+
+```nix
+imports = [ inputs.omdrop-owl.nixosModules.default ];
+services.omdrop-owl.enable = true;
+```
+
+The module installs the helper and its polkit policy, keeps NetworkManager off OWL's interfaces and udev from changing `awdl0`'s MAC address, opens TCP 8771 on `awdl0`, and stops NixOS restarting wpa_supplicant (dropping Wi-Fi) whenever OWL adds or removes an interface. omdrop finds the helper and `send-to-peer` on `PATH`.
+
+The `interface` and `allowUntested` options set `/etc/omdrop/infra-iface` and `/etc/omdrop/allow-untested`.
+</details>
+
+## Usage
+
+omdrop-owl needs the [omdrop](https://github.com/netmojo-systems/omdrop-plugin.git) plugin (0.16.0 or newer) to work.
+
+### On Omarchy (add it as a plugin):
+
+```sh
+omarchy plugin add https://github.com/netmojo-systems/omdrop-plugin.git
 ```
 
 and turn it on from the bar.
 
+### On other Linux systems:
+
+The bar icon and panel are Omarchy-only. On other distros, you can use the `omdrop` CLI:
+
+```sh
+git clone https://github.com/netmojo-systems/omdrop-plugin.git
+omdrop-plugin/bin/omdrop setup   # installs ~/.local/bin/omdrop and the receiver
+omdrop on 10m                    # visible for 10 minutes
+omdrop peers -n                  # nearby Apple devices and their names
+omdrop send <device> <file>
+omdrop off
+```
+
+If something doesn't work, `omdrop doctor` lists what's missing.
+
+Received files land in `~/Downloads`.
+
 
 ## Supported hardware
 
-- **Shared** mode = Wi-Fi stays connected
-- **Exclusive** mode = Wi-Fi is *off* while the machine is visible (see [why](#exclusive-mode))
+**Status:** ✅ both directions work, ⚠️ both have worked but not reliably ([known issues](#known-issues)), ❌ tried and fails, ❓ untested\
+**Modes:** *Shared* keeps Wi-Fi connected; *Exclusive* turns it off while visible ([why](#exclusive-mode))
 
 | Card | Driver | Status | Tested on |
 |---|---|---|---|
 | MediaTek MT7925 | `mt7925e` | ✅ Shared | Framework 13, `14c3:0717`, Omarchy 4.0.4 (kernel 7.2.5) |
-| Intel AX201 | `iwlwifi` | ✅ Exclusive | Ubuntu 24.04 (kernel 6.8); CachyOS (kernel 7.2.9) |
-| Intel AX211 | `iwlwifi` | ✅ Exclusive | ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0); XPS 9320, `8086:51f0`, Arch (kernel 7.2.3) |
+| MediaTek MT7612U (USB) | `mt76x2u` | ✅ Exclusive ([active monitor](#active-monitor)) | `0e8d:7612` (kernel 7.2.9) |
+| Realtek RTL8822BE | `rtw88_8822be` | ✅ Exclusive; shared untested | Crosshair VII Hero, `10ec:b822`, NixOS 26.11 (kernel 7.2.9) |
+| Realtek RTL8852AE | `rtw89_8852ae` | ✅ Shared (opt-in) | ThinkPad P14s Gen 2a, `10ec:8852`, Ubuntu 26.04.1 (kernel 7.0) |
+| Realtek RTL8852CE | `rtw89_8852ce` | ✅ Shared (opt-in) | Legion Slim 5 16AHP9, `10ec:c852`, Omarchy 4.0.4 (kernel 7.2.5) |
+| Intel 9560 | `iwlwifi` | ✅ Exclusive | Lenovo 81SY, `8086:a370`, Omarchy 4.0.0 (kernel 7.2.8) |
+| Intel AX200 | `iwlwifi` | ✅ Exclusive | ThinkPad X1 Yoga, `8086:2723`, NixOS 26.05 (kernel 6.19.8) |
+| Intel AX201 | `iwlwifi` | ✅ Exclusive | • Ubuntu 24.04 (kernel 6.8)<br>• CachyOS (kernel 7.2.9) |
+| Intel AX211 | `iwlwifi` | ✅ Exclusive | • ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0)<br>• XPS 9320, `8086:51f0`, Arch (kernel 7.2.3)<br>• Legion Pro 7 16IRX8H, `8086:7a70`, Omarchy 4.0.4 (kernel 7.2.3) |
 | Intel BE (Panther Lake) | `iwlwifi` | ✅ Exclusive | XPS 16, `8086:e440`, Arch (kernel 7.2) |
 | MediaTek MT7921 | `mt7921e` | ⚠️ Exclusive ([active monitor](#active-monitor)), opt-in ([#14](https://github.com/t4t5/omdrop-owl/issues/14)) | `14c3:7961`, CachyOS (kernel 7.2.9) |
 | MediaTek MT7922 (RZ616) | `mt7921e` | ⚠️ Exclusive ([active monitor](#active-monitor)), opt-in ([#14](https://github.com/t4t5/omdrop-owl/issues/14)) | Minisforum MS-A2, `14c3:0616`, NixOS 26.05 (kernels 6.18 and 7.2.5) |
-| MediaTek MT7612U (USB) | `mt76x2u` | ✅ Exclusive ([active monitor](#active-monitor)) | `0e8d:7612` (kernel 7.2.9) |
-| Intel AX200 | `iwlwifi` | ❓ Exclusive untested | — |
+| MediaTek MT7927 | `mt7925e` | ❌ Shared and exclusive ([#44](https://github.com/t4t5/omdrop-owl/issues/44)) | TP-Link Archer TBE550E, `14c3:7927`, CachyOS (kernel 7.2.9) |
+| Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❌ Shared ([#45](https://github.com/t4t5/omdrop-owl/issues/45)); no ad-hoc mode for exclusive | ThinkPad, `17cb:1103`, CachyOS (kernel 7.2.9) |
+| Realtek RTL8852BE | `rtw89_8852be` | ❓ Untested (opt-in) | — |
+| Qualcomm WCN7850 (FastConnect 7800) | `ath12k` | ❓ Untested (opt-in) | — |
+| Intel 9260 | `iwlwifi` | ❓ Exclusive untested | — |
 | Intel AX210 | `iwlwifi` | ❓ Exclusive untested | — |
 | Intel BE200 | `iwlwifi` | ❓ Exclusive untested | — |
-| Intel 9260 / 9560 | `iwlwifi` | ❓ Exclusive untested | — |
-| Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❓ Untested (opt-in) | — |
-| Qualcomm WCN7850 (FastConnect 7800) | `ath12k` | ❓ Untested (opt-in) | — |
-| Realtek RTL8852BE / RTL8852CE | `rtw89_8852be` / `rtw89_8852ce` | ❓ Untested (opt-in) | — |
-
-- ✅ means both directions work
-- ⚠️ means both directions have worked, but not reliably (see [Known issues](#known-issues))
-- ❌ means that the mode was tried and fails.
 
 One card name can cover chips that behave differently, so a report from a machine, PCI ID
 (`lspci -nn`) or kernel not listed here helps too.
@@ -79,7 +130,7 @@ What omdrop-owl does on each Wi-Fi driver comes from
 [`userspace/owl-profiles`](userspace/owl-profiles), one line per driver, so the
 `iwlwifi` line covers every Intel card. A driver with
 no line falls back to the `*` line, which only runs once you opt in with
-`echo 1 | sudo tee /etc/omdrop/allow-untested`.
+`sudo mkdir -p /etc/omdrop && echo 1 | sudo tee /etc/omdrop/allow-untested`.
 
 Cards that can inject frames from a monitor interface while connected to Wi-Fi
 are the likely candidates. Most mac80211 drivers can, but how they behave
@@ -147,9 +198,20 @@ by kmod-midori).
 
 ## Development
 
+The unit tests (no radio, no root, no network) run with `tools/run-tests.sh`
+and need [`bats`](https://github.com/bats-core/bats-core) and Python. The OWL
+A-MSDU test skips until `just build` has patched OWL.
+
 `just build` assembles the same files in `build/lib`, and `just test` runs the
 card test against them. On Arch, `makepkg -si` (or `just install`) builds and
 installs the pacman package from the checkout.
+
+Without the package, copy `packaging/99-omdrop-owl-unmanaged.conf` to
+`/etc/NetworkManager/conf.d/` and run `sudo nmcli general reload conf`, or
+NetworkManager manages OWL's interfaces and the phone never shows up. Copy
+`packaging/10-omdrop-owl-awdl0.link` to `/etc/systemd/network/` too: where
+udev's default MAC policy rewrites `awdl0`'s address (Ubuntu 22.04), the phone
+is sent a link-local `awdl0` doesn't have and never connects.
 
 ## Known issues
 
@@ -157,8 +219,15 @@ installs the pacman package from the checkout.
   `start` refuses and says so.
 - **The MT7925 drops off Wi-Fi when the monitor interface is removed** (an
   mt76/firmware bug), so `stop` reconnects Wi-Fi straight after.
+- **The MT7927 starts but is never heard.** It uses the MT7925's driver, so
+  it runs the MT7925's shared profile without an opt-in, but its monitor
+  interface doesn't receive the phone's frames, and the driver has no ad-hoc
+  mode for exclusive ([#44](https://github.com/t4t5/omdrop-owl/issues/44)).
 - **The MT7925 sends slower than it receives** (about 490 kB/s against
   1.3 MB/s): injected frames leave at most one every ~2.5 ms.
+- **UFW blocks the receiver**, so the phone never sees this machine. Run
+  `omdrop firewall install` to allow TCP 8771 from link-local addresses on
+  `awdl0`.
 - **Intel cards are slow**, since AWDL on channel 6 gets few of the iPhone's
   slots: a 2.4 MB photo takes 10–17 s on an AX201.
 - **The MT7921/MT7922 are unreliable on an active monitor.** `mt7921e` sends

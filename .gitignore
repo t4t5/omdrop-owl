@@ -12,5 +12,8 @@
 /*.pkg.tar.*
 /*.deb
 __pycache__
+/*.rpm
 
 owl-test-*
+# just readme-preview output
+/.readme-preview.html

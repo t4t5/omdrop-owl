@@ -22,6 +22,9 @@
 #   owl-08-amsdu-bound.patch  refuse an A-MSDU with more subframes than the
 #                           receive array has slots, instead of writing past
 #                           it (tests/owl_amsdu.c)
+#   owl-09-action-zero-padding.patch  accept the zero padding iPhones end
+#                           some MIFs with, instead of refusing the frame and
+#                           so never validating the peer (tests/owl_padding.c)
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 
