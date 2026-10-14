@@ -17,10 +17,19 @@ in
   options.services.omdrop-owl = {
     enable = lib.mkEnableOption "omdrop-owl, the AirDrop radio backend for omdrop";
 
+    # With the system's NetworkManager: an nmcli newer than the daemon can't
+    # release the station ("No such method SetManaged"), and NetworkManager
+    # then takes it back in the middle of an exclusive window.
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.callPackage ./package.nix { };
-      defaultText = lib.literalExpression "pkgs.callPackage ./package.nix { }";
+      default = pkgs.callPackage ./package.nix {
+        networkmanager = config.networking.networkmanager.package;
+      };
+      defaultText = lib.literalExpression ''
+        pkgs.callPackage ./package.nix {
+          networkmanager = config.networking.networkmanager.package;
+        }
+      '';
       description = "The omdrop-owl package to use.";
     };
 

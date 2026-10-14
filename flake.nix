@@ -13,11 +13,8 @@
         default = pkgs.callPackage ./nix/package.nix { };
       });
 
-      nixosModules.default =
-        { pkgs, lib, ... }:
-        {
-          imports = [ ./nix/module.nix ];
-          services.omdrop-owl.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-        };
+      # Built from the system's nixpkgs, not this flake's: nmcli has to match
+      # the NetworkManager the system runs (nix/module.nix).
+      nixosModules.default = ./nix/module.nix;
     };
 }
