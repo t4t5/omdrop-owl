@@ -72,13 +72,15 @@ and turn it on from the bar.
 | Intel AX201 | `iwlwifi` | ✅ Exclusive | • Ubuntu 24.04 (kernel 6.8)<br>• CachyOS (kernel 7.2.9) |
 | Intel AX211 | `iwlwifi` | ✅ Exclusive | • ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0)<br>• XPS 9320, `8086:51f0`, Arch (kernel 7.2.3)<br>• Legion Pro 7 16IRX8H, `8086:7a70`, Omarchy 4.0.4 (kernel 7.2.3) |
 | Intel BE (Panther Lake) | `iwlwifi` | ✅ Exclusive | XPS 16, `8086:e440`, Arch (kernel 7.2) |
+| Intel 9560 | `iwlwifi` | ✅ Exclusive | Lenovo 81SY, `8086:a370`, Omarchy 4.0.0 (kernel 7.2.8) |
 | Realtek RTL8822BE | `rtw88_8822be` | ✅ Exclusive; shared untested | Crosshair VII Hero, `10ec:b822`, NixOS 26.11 (kernel 7.2.9) |
 | MediaTek MT7921 | `mt7921e` | ❌ Exclusive ([#14](https://github.com/t4t5/omdrop-owl/issues/14)); shared untested | `14c3:7961`, CachyOS (kernel 7.2.9) |
+| MediaTek MT7927 | `mt7925e` | ❌ Shared and exclusive ([#44](https://github.com/t4t5/omdrop-owl/issues/44)) | TP-Link Archer TBE550E, `14c3:7927`, CachyOS (kernel 7.2.9) |
+| Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❌ Shared ([#45](https://github.com/t4t5/omdrop-owl/issues/45)); no ad-hoc mode for exclusive | ThinkPad, `17cb:1103`, CachyOS (kernel 7.2.9) |
 | Intel AX210 | `iwlwifi` | ❓ Exclusive untested | — |
 | Intel BE200 | `iwlwifi` | ❓ Exclusive untested | — |
-| Intel 9260 / 9560 | `iwlwifi` | ❓ Exclusive untested | — |
+| Intel 9260 | `iwlwifi` | ❓ Exclusive untested | — |
 | MediaTek MT7922 (RZ616) | `mt7921e` | ❓ Untested (opt-in) | — |
-| Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❓ Untested (opt-in) | — |
 | Qualcomm WCN7850 (FastConnect 7800) | `ath12k` | ❓ Untested (opt-in) | — |
 | Realtek RTL8852BE | `rtw89_8852be` | ❓ Untested (opt-in) | — |
 | MediaTek MT7612U (USB) | `mt76x2u` | ❓ Untested (opt-in), in progress in [#13](https://github.com/t4t5/omdrop-owl/pull/13) | — |
@@ -95,7 +97,7 @@ What omdrop-owl does on each Wi-Fi driver comes from
 [`userspace/owl-profiles`](userspace/owl-profiles), one line per driver, so the
 `iwlwifi` line covers every Intel card. A driver with
 no line falls back to the `*` line, which only runs once you opt in with
-`echo 1 | sudo tee /etc/omdrop/allow-untested`.
+`sudo mkdir -p /etc/omdrop && echo 1 | sudo tee /etc/omdrop/allow-untested`.
 
 Cards that can inject frames from a monitor interface while connected to Wi-Fi
 are the likely candidates. Most mac80211 drivers can, but how they behave
@@ -168,6 +170,10 @@ is sent a link-local `awdl0` doesn't have and never connects.
   `start` refuses and says so.
 - **The MT7925 drops off Wi-Fi when the monitor interface is removed** (an
   mt76/firmware bug), so `stop` reconnects Wi-Fi straight after.
+- **The MT7927 starts but is never heard.** It uses the MT7925's driver, so
+  it runs the MT7925's shared profile without an opt-in, but its monitor
+  interface doesn't receive the phone's frames, and the driver has no ad-hoc
+  mode for exclusive ([#44](https://github.com/t4t5/omdrop-owl/issues/44)).
 - **The MT7925 sends slower than it receives** (about 490 kB/s against
   1.3 MB/s): injected frames leave at most one every ~2.5 ms.
 - **UFW blocks the receiver**, so the phone never sees this machine. Run
