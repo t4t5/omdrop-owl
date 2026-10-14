@@ -102,7 +102,7 @@ Received files land in `~/Downloads`.
 | Card | Driver | Status | Tested on |
 |---|---|---|---|
 | MediaTek MT7925 | `mt7925e` | ✅ Shared | Framework 13, `14c3:0717`, Omarchy 4.0.4 (kernel 7.2.5) |
-| MediaTek MT7612U (USB) | `mt76x2u` | ✅ Exclusive ([active monitor](#active-monitor)) | `0e8d:7612` (kernel 7.2.9) |
+| MediaTek MT7612U (USB) | `mt76x2u` | ✅ Exclusive | `0e8d:7612` (kernel 7.2.9) |
 | Realtek RTL8822BE | `rtw88_8822be` | ✅ Exclusive; shared untested | Crosshair VII Hero, `10ec:b822`, NixOS 26.11 (kernel 7.2.9) |
 | Realtek RTL8852AE | `rtw89_8852ae` | ✅ Shared (opt-in) | ThinkPad P14s Gen 2a, `10ec:8852`, Ubuntu 26.04.1 (kernel 7.0) |
 | Realtek RTL8852CE | `rtw89_8852ce` | ✅ Shared (opt-in) | Legion Slim 5 16AHP9, `10ec:c852`, Omarchy 4.0.4 (kernel 7.2.5) |
@@ -111,8 +111,8 @@ Received files land in `~/Downloads`.
 | Intel AX201 | `iwlwifi` | ✅ Exclusive | • Ubuntu 24.04 (kernel 6.8)<br>• CachyOS (kernel 7.2.9) |
 | Intel AX211 | `iwlwifi` | ✅ Exclusive | • ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0)<br>• XPS 9320, `8086:51f0`, Arch (kernel 7.2.3)<br>• Legion Pro 7 16IRX8H, `8086:7a70`, Omarchy 4.0.4 (kernel 7.2.3) |
 | Intel BE (Panther Lake) | `iwlwifi` | ✅ Exclusive | XPS 16, `8086:e440`, Arch (kernel 7.2) |
-| MediaTek MT7921 | `mt7921e` | ⚠️ Exclusive ([active monitor](#active-monitor)), opt-in; shared fails ([#14](https://github.com/t4t5/omdrop-owl/issues/14)) | `14c3:7961`, CachyOS (kernel 7.2.9) |
-| MediaTek MT7922 (RZ616) | `mt7921e` | ⚠️ Exclusive ([active monitor](#active-monitor)), opt-in; shared fails ([#14](https://github.com/t4t5/omdrop-owl/issues/14)) | Minisforum MS-A2, `14c3:0616`, NixOS 26.05 (kernels 6.18 and 7.2.5) |
+| MediaTek MT7921 | `mt7921e` | ⚠️ Exclusive, opt-in; shared fails ([#14](https://github.com/t4t5/omdrop-owl/issues/14)) | `14c3:7961`, CachyOS (kernel 7.2.9) |
+| MediaTek MT7922 (RZ616) | `mt7921e` | ⚠️ Exclusive, opt-in; shared fails ([#14](https://github.com/t4t5/omdrop-owl/issues/14)) | Minisforum MS-A2, `14c3:0616`, NixOS 26.05 (kernels 6.18 and 7.2.5) |
 | MediaTek MT7927 | `mt7925e` | ❌ Shared and exclusive ([#44](https://github.com/t4t5/omdrop-owl/issues/44)) | TP-Link Archer TBE550E, `14c3:7927`, CachyOS (kernel 7.2.9) |
 | Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❌ Shared ([#45](https://github.com/t4t5/omdrop-owl/issues/45)); no ad-hoc mode for exclusive | ThinkPad, `17cb:1103`, CachyOS (kernel 7.2.9) |
 | Realtek RTL8852BE | `rtw89_8852be` | ❓ Untested (opt-in) | — |
@@ -180,21 +180,10 @@ while the machine is visible and restores it on `stop`.
 - OWL injects through a monitor interface, advertises our channel in all
   16 slots (`-S pin`), and elects its sync master by metric (`-E`). Unicast
   frames are sent once to avoid retries stalling the queue.
-
-### Active monitor
-
-The MediaTek MT7921, MT7922 and MT7612U have no ad-hoc mode, so their profile
-says `mode active-monitor`: exclusive mode as above, with an active monitor in
-place of the ad-hoc interface ([#13](https://github.com/t4t5/omdrop-owl/pull/13),
-by kmod-midori).
-
-- The monitor interface is an active one, which ACKs unicast to its own MAC,
-  so it carries the station's.
-- The Wi-Fi interface itself becomes a passive monitor first. An active
-  monitor alone accepted channel changes but stayed on its old channel.
-- It runs on channel 6 only. On 44, the MT7922 put none of its unicast on the
-  air, while on 6 nearly all of it reached the phone, at 1 Mbit/s (see
-  [Known issues](#known-issues)).
+- Cards with no ad-hoc mode (the MediaTek MT7921, MT7922 and MT7612U) use
+  `mode active-monitor` instead: an active monitor carrying the station's MAC
+  ACKs in place of the IBSS interface
+  ([#13](https://github.com/t4t5/omdrop-owl/pull/13), by kmod-midori).
 
 ## Development
 
@@ -230,14 +219,6 @@ is sent a link-local `awdl0` doesn't have and never connects.
   `awdl0`.
 - **Intel cards are slow**, since AWDL on channel 6 gets few of the iPhone's
   slots: a 2.4 MB photo takes 10–17 s on an AX201.
-- **The MT7921/MT7922 are unreliable on an active monitor.** `mt7921e` sends
-  unicast data injected from a monitor at 1 Mbit/s CCK, whatever rate the
-  radiotap header asks for; multicast goes at the band's basic rate. On 5 GHz,
-  where CCK doesn't exist, no unicast reaches the air at all. On channel 6 it
-  does, but a full frame then fills most of the 16 TU an iPhone on 5 GHz Wi-Fi
-  spends there once in sixteen slots, so discovery and the TLS handshake often
-  stall before the phone widens its visits (up to six slots once an exchange
-  is under way). Close and reopen the share sheet to retry. Sending the
-  phone's unicast in group-addressed frames instead (all-nodes, solicited-node
-  or broadcast) gets it on the air at 6 Mbit/s on 44, but iOS drops it. The
-  fix belongs in the driver: honour the injected rate for unicast data.
+- **The MT7921/MT7922 are unreliable.** `mt7921e` sends injected unicast at
+  1 Mbit/s whatever rate is asked for, and not at all on 5 GHz, so discovery
+  and the handshake often stall. Close and reopen the share sheet to retry.
