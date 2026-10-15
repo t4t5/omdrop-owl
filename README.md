@@ -119,7 +119,7 @@ Received files land in `~/Downloads`.
 | Qualcomm WCN7850 (FastConnect 7800) | `ath12k` | ❓ Untested (opt-in) | — |
 | Intel 9260 | `iwlwifi` | ❓ Exclusive untested | — |
 | Intel AX210 | `iwlwifi` | ❓ Exclusive untested | — |
-| Intel BE200 | `iwlwifi` | ❓ Exclusive untested | — |
+| Intel BE200 | `iwlwifi` | ✅ Exclusive | GEEKOM IT13 Max (Core Ultra 9 185H), `8086:272b` (subsystem `8086:00f4`), Omarchy 4.0.4 (kernel 7.2.5) |
 
 One card name can cover chips that behave differently, so a report from a machine, PCI ID
 (`lspci -nn`) or kernel not listed here helps too.
