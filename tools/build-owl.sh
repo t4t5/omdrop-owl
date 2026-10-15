@@ -32,6 +32,9 @@
 #                           the gaps before them fill, as mac80211 does, so
 #                           TCP gets them in order (src/reorder.c,
 #                           tests/owl_reorder.c)
+#   owl-14-wide.patch  -V: advertise two streams (HT MCS 0-15) and VHT, and
+#                           tune 80 MHz on 5 GHz, so a peer may send VHT80 2SS
+#                           (tests/owl_wide.c)
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 
@@ -61,7 +64,7 @@ cmake -S "$DIR" -B "$DIR/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSIO
 cmake --build "$DIR/build" --target owl -j"$(nproc)" >/dev/null
 
 BIN=$DIR/build/daemon/owl
-case "$("$BIN" -S intersect -R 12 -m 02:00:00:00:00:01 -F -E -A -h 2>&1 || true)" in
-  *"invalid option"*|*"-R takes"*|*"-m takes"*) echo "$BIN lacks -S, -R, -m, -F, -E or -A; did the patches apply?"; exit 1 ;;
+case "$("$BIN" -S intersect -R 12 -m 02:00:00:00:00:01 -F -E -A -V -h 2>&1 || true)" in
+  *"invalid option"*|*"-R takes"*|*"-m takes"*) echo "$BIN lacks -S, -R, -m, -F, -E, -A or -V; did the patches apply?"; exit 1 ;;
 esac
 echo "built $BIN: owl@${OWL_COMMIT:0:7} + $(ls "$ROOT"/patches/owl-*.patch | wc -l) patches"
