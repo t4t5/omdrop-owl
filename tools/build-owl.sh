@@ -25,6 +25,10 @@
 #   owl-09-action-zero-padding.patch  accept the zero padding iPhones end
 #                           some MIFs with, instead of refusing the frame and
 #                           so never validating the peer (tests/owl_padding.c)
+#   owl-12-psf-ht-capabilities.patch  HT capabilities in PSFs too, not only
+#                           MIFs, as iPadOS 27 sends them: Android's AWDL
+#                           (Quick Share) drops PSFs without it
+#                           (tests/owl_ht_caps.c)
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 

@@ -41,6 +41,6 @@ jobs:
         # Here, not in CI's test job: it needs the OWL tree build-rpm.sh just
         # patched, and a skip would hide that it didn't run.
         run: |
-          python3 -m unittest -v tests/test_owl_amsdu.py tests/test_owl_padding.py 2> owl.log || { cat owl.log; exit 1; }
+          python3 -m unittest -v tests/test_owl_*.py 2> owl.log || { cat owl.log; exit 1; }
           cat owl.log
           ! grep -q skipped owl.log
