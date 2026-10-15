@@ -32,6 +32,9 @@
 #   owl-13-rx-flags-init.patch  radiotap Flags read as 0 when a frame has
 #                           none, not whatever the stack held
 #                           (tests/owl_rx_flags.c)
+#   owl-14-airdrop-port.patch  log "peer <mac> airdrop port N" from the SRV
+#                           record in a peer's Service Response TLV: Android
+#                           serves AirDrop on a random port (tests/owl_airdrop_port.c)
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 
