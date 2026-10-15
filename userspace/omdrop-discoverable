@@ -144,9 +144,14 @@ mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/c
 # unicast injected from it at 1 Mbit/s CCK whatever rate OWL asks for, so on
 # 44 none of the MT7922's reached the air (0 of 132, to an independent
 # capture), while on 6 115 of 121 did, and the phone ACKed 100.
+# $CONF/exclusive-channel, a frequency in MHz (2437, 5220 or 5745), replaces
+# that order: it's how a MT7921 with the injected-rate driver fix (README,
+# "Known issues") gets on 44. The regulatory domain still has its say.
 tx_channels() {  # PHY
-  local ok c order="5220 5745 2437"
+  local ok c order="5220 5745 2437" want
   [ "${PROF_MODE:-}" = active-monitor ] && order=2437
+  want=$(knob exclusive-channel)
+  [ -z "$want" ] || order=$want
   ok=$(iw phy "$1" channels 2>/dev/null | awk '
     /^[[:space:]]*\* [0-9]+ MHz/ { if (f && ok) print f; f = $2; ok = !/disabled/; next }
     /No IR|Radar detection/ { ok = 0 }
@@ -154,6 +159,29 @@ tx_channels() {  # PHY
   for c in $order; do
     grep -qx "$c" <<< "$ok" && echo "$c"
   done
+}
+
+# Adds to the caller's owl_extra what makes the active-monitor cards measured
+# with them fast.
+# owl -A (patches/owl-10-addba-accept.patch): accept the phone's Block Ack
+# session request, so it sends A-MPDUs. Unanswered, an iPhone asked 61 times
+# in a 30 MB upload and sent all 21,941 frames singly. The active monitors of
+# the MT7612U and the MT7921 answer each A-MPDU with a Block Ack themselves:
+# the MT7612U's upload took 14 s instead of 47 s on 149, and the MT7921's
+# retries fell from 5.2% to 0.2%. On by default there, as other cards haven't
+# been measured.
+# $CONF/aggregation 1 or 0 overrides.
+# owl -V, -R mcs15-40-sgi (owl-14-wide.patch, owl-15-ht-tx-rate.patch), for
+# the MT7921 off channel 6: advertise two streams and VHT and tune 80 MHz, so
+# an iPad sends VHT80 2SS, and send HT MCS 15 on 40 MHz, short GI, which the
+# driver fix lets the card do. Channel 6 stays at the legacy rate.
+owl_speed_options() {  # DRV CHAN
+  local aggregation default=
+  aggregation=$(knob aggregation)
+  [ "$PROF_MODE" = active-monitor ] && [[ $1 == mt76x2u || $1 == mt7921e ]] && default=1
+  [ "${aggregation:-$default}" = 1 ] && owl_extra+=(-A)
+  [ "$PROF_MODE" = active-monitor ] && [ "$1" = mt7921e ] && [ "$2" != 6 ] && owl_extra+=(-V -R mcs15-40-sgi)
+  return 0
 }
 
 # Take the station off the air and put an ad-hoc vif in its place. AWDL's
@@ -473,7 +501,7 @@ supervise() {
 }
 
 cmd_start() {
-  local secs=${1:-} sta drv phy gw ap freqs chan stamac monmac mt76 problem aggregation _
+  local secs=${1:-} sta drv phy gw ap freqs chan stamac monmac mt76 problem _
   local owl_extra=() strategy=intersect
   [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: omdrop-discoverable start <seconds>" 2
   need_root
@@ -520,7 +548,7 @@ cmd_start() {
     # From here a failure has to give Wi-Fi back, which is cmd_stop's job.
     if ! ap=$(exclusive_up "$sta" "$phy" $freqs); then
       cmd_stop start-failed >/dev/null
-      [ "$PROF_MODE" = active-monitor ] && die "could not set up the active monitor $MON on channel 6" 4
+      [ "$PROF_MODE" = active-monitor ] && die "could not set up the active monitor $MON" 4
       die "could not start the ad-hoc interface $IBSS on any of AirDrop's channels" 4
     fi
   else
@@ -574,16 +602,7 @@ cmd_start() {
     owl_extra+=(-F -E)
     strategy=pin
   fi
-  # owl -A (patches/owl-10-addba-accept.patch): accept the phone's Block Ack
-  # session request, so it sends A-MPDUs. Unanswered, an iPhone asked 61
-  # times in a 30 MB upload and sent all 21,941 frames singly. The MT7612U's
-  # active monitor answers each A-MPDU with a Block Ack itself, and the upload
-  # took 14 s instead of 47 s on 149; on by default there, as other cards
-  # haven't been measured. $CONF/aggregation 1 or 0 overrides.
-  aggregation=$(knob aggregation)
-  if [ "$aggregation" = 1 ] || { [ -z "$aggregation" ] && [ "$PROF_MODE" = active-monitor ] && [ "$drv" = mt76x2u ]; }; then
-    owl_extra+=(-A)
-  fi
+  owl_speed_options "$drv" "$chan"
 
   # mt76_pm: runtime PM off for the window, restored by stop.
   mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null

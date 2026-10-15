@@ -111,7 +111,7 @@ Received files land in `~/Downloads`.
 | Intel AX201 | `iwlwifi` | ✅ Exclusive | • Ubuntu 24.04 (kernel 6.8)<br>• CachyOS (kernel 7.2.9) |
 | Intel AX211 | `iwlwifi` | ✅ Exclusive | • ThinkPad X1, `8086:51f1`, Ubuntu 26.04 (kernel 7.0)<br>• XPS 9320, `8086:51f0`, Arch (kernel 7.2.3)<br>• Legion Pro 7 16IRX8H, `8086:7a70`, Omarchy 4.0.4 (kernel 7.2.3) |
 | Intel BE (Panther Lake) | `iwlwifi` | ✅ Exclusive | XPS 16, `8086:e440`, Arch (kernel 7.2) |
-| MediaTek MT7921 | `mt7921e` | ⚠️ Exclusive, opt-in; shared fails ([#14](https://github.com/t4t5/omdrop-owl/issues/14)) | `14c3:7961`, CachyOS (kernel 7.2.9) |
+| MediaTek MT7921 | `mt7921e` | ⚠️ Exclusive, opt-in; shared fails ([#14](https://github.com/t4t5/omdrop-owl/issues/14)); fast on channel 44 with a [patched driver](#the-mt7921-on-channel-44) | `14c3:7961`, CachyOS (kernel 7.2.9) |
 | MediaTek MT7922 (RZ616) | `mt7921e` | ⚠️ Exclusive, opt-in; shared fails ([#14](https://github.com/t4t5/omdrop-owl/issues/14)) | Minisforum MS-A2, `14c3:0616`, NixOS 26.05 (kernels 6.18 and 7.2.5) |
 | MediaTek MT7927 | `mt7925e` | ❌ Shared and exclusive ([#44](https://github.com/t4t5/omdrop-owl/issues/44)) | TP-Link Archer TBE550E, `14c3:7927`, CachyOS (kernel 7.2.9) |
 | Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❌ Shared ([#45](https://github.com/t4t5/omdrop-owl/issues/45)); no ad-hoc mode for exclusive | ThinkPad, `17cb:1103`, CachyOS (kernel 7.2.9) |
@@ -186,6 +186,39 @@ while the machine is visible and restores it on `stop`.
   ([#24](https://github.com/t4t5/omdrop-owl/pull/24), from kmod-midori's
   [#13](https://github.com/t4t5/omdrop-owl/pull/13)).
 
+### The MT7921 on channel 44
+
+The stock `mt7921e` sends injected unicast at 1 Mbit/s whatever rate OWL asks
+for, and not at all on 5 GHz. With a patched driver the MT7921 runs on channel
+44 at 80 MHz and sends HT MCS 15 (two streams):
+
+| 30.4 MB video, channel 44 | Legacy-rate driver fix only | Driver fix and the options below |
+|---|---|---|
+| iPad to PC | 1.7 MB/s | 3.0–3.4 s (9–10 MB/s) |
+| PC to iPad | 0.46 MB/s | 10.2–11.6 s (2.6–3.0 MB/s) |
+
+The same card receives in 3.3–5.6 s from an iPad that is off Wi-Fi.
+
+The driver fix is [shaecodes-wilde's `02b6c9a1`](https://github.com/shaecodes-wilde/mt76/commit/02b6c9a1ef87e55f2ccf90739e5dbcab55390cc7)
+with [`2a2f085d`](https://github.com/shaecodes-wilde/mt76/commit/2a2f085dc1f9)
+for the MT7921 ([#14](https://github.com/t4t5/omdrop-owl/issues/14)), which
+honours legacy rates, and an extension of it to HT rates, which
+`-R mcs15-40-sgi` needs (also on [#14](https://github.com/t4t5/omdrop-owl/issues/14)). No
+kernel has either, so the profile stays `untested`. With them built and loaded:
+
+1. Opt in: `echo 1 | sudo tee /etc/omdrop/allow-untested`.
+2. Choose channel 44: `echo 5220 | sudo tee /etc/omdrop/exclusive-channel`
+   (a frequency in MHz, so 2437 or 5745 work too, where your regulatory
+   domain allows them). Without the file the card stays on channel 6.
+
+`start` then runs OWL with `-A`, which answers the phone's Block Ack request so
+it sends A-MPDUs (retries fell from 5.2% to 0.2%); off channel 6 also `-V`,
+which advertises two streams and VHT and tunes 80 MHz so an iPad sends VHT80
+two-stream, and `-R mcs15-40-sgi`, which sends HT MCS 15 at 40 MHz with short
+guard interval. `echo 0 | sudo tee /etc/omdrop/aggregation` turns `-A` off.
+Only the MT7921 on channel 44 has been measured: the MT7922 shares the driver
+and gets the same options, untested.
+
 ## Development
 
 The unit tests (no radio, no root, no network) run with `tools/run-tests.sh`
@@ -222,4 +255,5 @@ is sent a link-local `awdl0` doesn't have and never connects.
   slots: a 2.4 MB photo takes 10–17 s on an AX201.
 - **The MT7921/MT7922 are unreliable.** `mt7921e` sends injected unicast at
   1 Mbit/s whatever rate is asked for, and not at all on 5 GHz, so discovery
-  and the handshake often stall. Close and reopen the share sheet to retry.
+  and the handshake often stall. Close and reopen the share sheet to retry. A
+  [patched driver](#the-mt7921-on-channel-44) fixes this for the MT7921.
