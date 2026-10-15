@@ -1,0 +1,136 @@
+diff --git a/daemon/netutils.c b/daemon/netutils.c
+index b0d3e50..032461c 100644
+--- a/daemon/netutils.c
++++ b/daemon/netutils.c
+@@ -23,6 +23,7 @@
+ #include <stdbool.h>
+ #include <ieee80211.h>
+ #include <log.h>
++#include <tx.h>
+ #include <string.h>
+ 
+ #ifndef __APPLE__
+@@ -458,7 +459,16 @@ int set_channel(int ifindex, int channel) {
+ 
+ 	NLA_PUT_U32(m, NL80211_ATTR_IFINDEX, ifindex);
+ 	NLA_PUT_U32(m, NL80211_ATTR_WIPHY_FREQ, freq);
+-	NLA_PUT_U32(m, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_HT40PLUS);
++	if (awdl_wide && freq >= 5180 && freq <= 5240) {
++		/* -V: VHT80 over channels 36-48, as Apple's AWDL uses 44 */
++		NLA_PUT_U32(m, NL80211_ATTR_CHANNEL_WIDTH, NL80211_CHAN_WIDTH_80);
++		NLA_PUT_U32(m, NL80211_ATTR_CENTER_FREQ1, 5210);
++	} else if (awdl_wide && freq >= 5745 && freq <= 5805) {
++		NLA_PUT_U32(m, NL80211_ATTR_CHANNEL_WIDTH, NL80211_CHAN_WIDTH_80);
++		NLA_PUT_U32(m, NL80211_ATTR_CENTER_FREQ1, 5775);
++	} else {
++		NLA_PUT_U32(m, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_HT40PLUS);
++	}
+ 
+ 	err = nl_send_auto(nl80211_state.chan_socket, m);
+ 	if (err < 0) {
+diff --git a/daemon/owl.c b/daemon/owl.c
+index ccab874..b3ac2e6 100644
+--- a/daemon/owl.c
++++ b/daemon/owl.c
+@@ -107,7 +107,7 @@ int main(int argc, char *argv[]) {
+ 
+ 	struct daemon_state state;
+ 
+-	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:FEA")) != -1) {
++	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:FEAV")) != -1) {
+ 		switch (c) {
+ 			case 'm': {
+ 				/* Our AWDL address, instead of the monitor interface's MAC. On
+@@ -203,6 +203,10 @@ int main(int argc, char *argv[]) {
+ 				 * aggregate (src/rx.c, awdl_send_addba_response). */
+ 				accept_addba = 1;
+ 				break;
++			case 'V':
++				/* Advertise 2 streams and VHT, and tune 80 MHz (src/tx.c). */
++				awdl_wide = 1;
++				break;
+ 			case '?':
+ 				if (optopt == 'i')
+ 					fprintf(stderr, "Option -%c needs to specify a wireless interface.\n", optopt);
+@@ -290,6 +294,8 @@ int main(int argc, char *argv[]) {
+ 	state.awdl_state.accept_addba = accept_addba;
+ 	if (accept_addba)
+ 		log_info("Block Ack: accepting session requests (A-MPDU)");
++	if (awdl_wide)
++		log_info("wide: advertising 2 streams and VHT, tuning 80 MHz on 5 GHz");
+ 	if (metric_first)
+ 		log_info("election: by metric, then counter");
+ 	if (fixed_radio)
+diff --git a/src/tx.c b/src/tx.c
+index 20b8326..eb3fb0c 100644
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -239,9 +239,42 @@ int awdl_init_ht_capabilities_tlv(uint8_t *buf, const struct awdl_state *state _
+ 	tlv->unknown = htole16(0);
+ 	tlv->unknown2 = htole16(0);
+ 
++	if (awdl_wide) {
++		/* Two streams the way an iPad sends them: one more MCS byte, nine
++		 * bytes in all (00 00 ce 11 1b ff ff 00 00). Folding it into the
++		 * 8-byte form made Android's AWDL daemon reject our frames
++		 * ("Failed to deserialize HtCaps: 0000ce111bffff00"). */
++		uint8_t *v = buf + sizeof(struct tl);
++		static const uint8_t tail[] = { 0x1b, 0xff, 0xff, 0x00, 0x00 };
++		memcpy(v + 4, tail, sizeof(tail));
++		tlv->length = htole16(9);
++		return sizeof(struct tl) + 9;
++	}
+ 	return sizeof(struct awdl_ht_capabilities_tlv);
+ }
+ 
++int awdl_wide = 0;
++
++/* An IEEE 802.11 container TLV carrying a VHT Capabilities element, laid out
++ * as an iPad sends it (bf 0c, caps, rx map, rx highest, tx map, tx highest).
++ * Caps: RX LDPC, short GI 80, RX STBC 1, max A-MPDU exponent 7; no
++ * beamforming, as an injecting monitor can't sound. Maps: 2 streams MCS 0-9,
++ * as `iw phy` reports for the MT7921. */
++int awdl_init_vht_capabilities_tlv(uint8_t *buf, const struct awdl_state *state __attribute__((unused))) {
++	static const uint8_t ie[] = {
++		191, 12,
++		0x30, 0x01, 0x80, 0x03, /* 0x03800130 */
++		0xfa, 0xff, 0x00, 0x00,
++		0xfa, 0xff, 0x00, 0x00,
++	};
++	struct tl *tlv = (struct tl *) buf;
++
++	tlv->type = AWDL_IEEE80211_CNTNR_TLV;
++	tlv->length = htole16(sizeof(ie));
++	memcpy(buf + sizeof(struct tl), ie, sizeof(ie));
++	return sizeof(struct tl) + sizeof(ie);
++}
++
+ int awdl_init_data_path_state_tlv(uint8_t *buf, const struct awdl_state *state) {
+ 	struct awdl_data_path_state_tlv *tlv = (struct awdl_data_path_state_tlv *) buf;
+ 
+@@ -484,6 +517,8 @@ int awdl_init_full_action_frame(uint8_t *buf, struct awdl_state *state, struct i
+ 	ptr += awdl_init_service_params_tlv(ptr, state);
+ 	if (type == AWDL_ACTION_MIF)
+ 		ptr += awdl_init_ht_capabilities_tlv(ptr, state);
++	if (type == AWDL_ACTION_MIF && awdl_wide)
++		ptr += awdl_init_vht_capabilities_tlv(ptr, state);
+ 	if (type == AWDL_ACTION_MIF)
+ 		ptr += awdl_init_arpa_tlv(ptr, state);
+ 	ptr += awdl_init_data_path_state_tlv(ptr, state);
+diff --git a/src/tx.h b/src/tx.h
+index e33d8df..49f0471 100644
+--- a/src/tx.h
++++ b/src/tx.h
+@@ -74,6 +74,12 @@ struct ieee80211_tx_rate {
+  * legacy 12 Mbit/s, as iPhones do for theirs. */
+ extern struct ieee80211_tx_rate awdl_data_tx_rate;
+ 
++/* owl -V: advertise two spatial streams (HT MCS 0-15) and VHT, so a peer may
++ * send VHT80 2SS; the monitor also tunes 80 MHz (daemon/netutils.c). */
++extern int awdl_wide;
++
++int awdl_init_vht_capabilities_tlv(uint8_t *buf, const struct awdl_state *state);
++
+ int ieee80211_parse_tx_rate(const char *s, struct ieee80211_tx_rate *rate);
+ 
+ int ieee80211_format_tx_rate(char *buf, size_t len, const struct ieee80211_tx_rate *rate);

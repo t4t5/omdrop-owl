@@ -1,0 +1,89 @@
+diff --git a/daemon/owl.c b/daemon/owl.c
+index b3ac2e6..3c725ee 100644
+--- a/daemon/owl.c
++++ b/daemon/owl.c
+@@ -125,12 +125,12 @@ int main(int argc, char *argv[]) {
+ 				break;
+ 			}
+ 			case 'R':
+-				/* PHY rate for data frames: 6..54 (legacy Mbit/s), mcsN or mcsN-sgi.
++				/* PHY rate for data frames: legacy Mbit/s or mcsN[-20|-40][-lgi|-sgi].
+ 				 * Default legacy 12, as before. Action frames stay at 12. */
+ 				if (ieee80211_parse_tx_rate(optarg, &awdl_data_tx_rate) < 0) {
+ 					/* stderr, not log_error: logging isn't set up while parsing options */
+ 					fprintf(stderr, "-R takes a legacy rate (6, 9, 12, 18, 24, 36, 48, 54), "
+-					        "mcs0..mcs15 or mcsN-sgi, not '%s'\n", optarg);
++					        "mcs0..mcs15[-20|-40][-lgi|-sgi], not '%s'\n", optarg);
+ 					return EXIT_FAILURE;
+ 				}
+ 				break;
+diff --git a/src/tx.c b/src/tx.c
+index eb3fb0c..d640ec9 100644
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -333,19 +333,26 @@ struct ieee80211_tx_rate awdl_data_tx_rate = { .legacy = 12, .mcs = -1, .sgi = 0
+ 
+ static const struct ieee80211_tx_rate legacy_12 = { .legacy = 12, .mcs = -1, .sgi = 0 };
+ 
+-/* "12" (legacy Mbit/s), "mcs7" (HT MCS, 20 MHz) or "mcs7-sgi". */
++/* mcsN is 20 MHz, long GI, as before; -20/-40 and -lgi/-sgi say otherwise. */
+ int ieee80211_parse_tx_rate(const char *s, struct ieee80211_tx_rate *rate) {
+ 	static const int legacy_ok[] = { 6, 9, 12, 18, 24, 36, 48, 54 };
+ 	char *end;
+ 	long v;
+ 
+ 	rate->sgi = 0;
++	rate->bw40 = 0;
+ 	if (!strncmp(s, "mcs", 3)) {
+ 		v = strtol(s + 3, &end, 10);
+ 		if (end == s + 3 || v < 0 || v > 15)
+ 			return -1;
++		if (!strncmp(end, "-20", 3) || !strncmp(end, "-40", 3)) {
++			rate->bw40 = end[1] == '4';
++			end += 3;
++		}
+ 		if (!strcmp(end, "-sgi"))
+ 			rate->sgi = 1;
++		else if (!strcmp(end, "-lgi"))
++			rate->sgi = 0;
+ 		else if (*end)
+ 			return -1;
+ 		rate->mcs = (int) v;
+@@ -368,7 +375,8 @@ int ieee80211_parse_tx_rate(const char *s, struct ieee80211_tx_rate *rate) {
+ int ieee80211_format_tx_rate(char *buf, size_t len, const struct ieee80211_tx_rate *rate) {
+ 	if (rate->mcs < 0)
+ 		return snprintf(buf, len, "legacy %d Mbit/s", rate->legacy);
+-	return snprintf(buf, len, "HT MCS %d, 20 MHz%s", rate->mcs, rate->sgi ? ", short GI" : "");
++	return snprintf(buf, len, "HT MCS %d, %d MHz, %s GI", rate->mcs,
++	                rate->bw40 ? 40 : 20, rate->sgi ? "short" : "long");
+ }
+ 
+ int ieee80211_init_radiotap_header(uint8_t *buf) {
+@@ -419,7 +427,8 @@ static int init_radiotap_header(uint8_t *buf, const struct ieee80211_tx_rate *ra
+ 		/* known, flags, mcs; byte-aligned, so no padding needed after RATE-less header */
+ 		present |= ieee80211_radiotap_type_to_mask(IEEE80211_RADIOTAP_MCS);
+ 		*ptr++ = IEEE80211_RADIOTAP_MCS_HAVE_BW | IEEE80211_RADIOTAP_MCS_HAVE_MCS | IEEE80211_RADIOTAP_MCS_HAVE_GI;
+-		*ptr++ = IEEE80211_RADIOTAP_MCS_BW_20 | (rate->sgi ? IEEE80211_RADIOTAP_MCS_SGI : 0);
++		*ptr++ = (rate->bw40 ? IEEE80211_RADIOTAP_MCS_BW_40 : IEEE80211_RADIOTAP_MCS_BW_20) |
++		         (rate->sgi ? IEEE80211_RADIOTAP_MCS_SGI : 0);
+ 		*ptr++ = (uint8_t) rate->mcs;
+ 	}
+ 
+diff --git a/src/tx.h b/src/tx.h
+index 49f0471..fcb5b22 100644
+--- a/src/tx.h
++++ b/src/tx.h
+@@ -63,11 +63,12 @@ int awdl_init_full_data_frame(uint8_t *buf, const struct ether_addr *src, const
+                               struct awdl_state *, struct ieee80211_state *);
+ 
+ /* The PHY rate a frame is injected at: legacy (Mbit/s) when mcs < 0,
+- * otherwise an HT MCS index at 20 MHz. */
++ * otherwise an HT MCS index at 20 or 40 MHz. */
+ struct ieee80211_tx_rate {
+ 	int legacy;
+ 	int mcs;
+ 	int sgi;
++	int bw40;
+ };
+ 
+ /* Data frames are injected at this rate; see owl -R. Action frames always use

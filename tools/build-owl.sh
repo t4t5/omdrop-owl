@@ -25,6 +25,19 @@
 #   owl-09-action-zero-padding.patch  accept the zero padding iPhones end
 #                           some MIFs with, instead of refusing the frame and
 #                           so never validating the peer (tests/owl_padding.c)
+#   owl-10-addba-accept.patch  -A: answer a peer's Block Ack session request
+#                           (ADDBA) with success, so it may send A-MPDUs
+#                           (tests/owl_addba.c)
+#   owl-11-rx-reorder.patch  with -A, hold a Block Ack session's frames until
+#                           the gaps before them fill, as mac80211 does, so
+#                           TCP gets them in order (src/reorder.c,
+#                           tests/owl_reorder.c)
+#   owl-14-wide.patch  -V: advertise two streams (HT MCS 0-15) and VHT, and
+#                           tune 80 MHz on 5 GHz, so a peer may send VHT80 2SS
+#                           (tests/owl_wide.c)
+#   owl-15-ht-tx-rate.patch  -R mcsN[-20|-40][-lgi|-sgi]: the HT width and
+#                           guard interval; bare mcsN stays 20 MHz, long GI
+#                           (tests/owl_tx_rate.c)
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 
@@ -54,7 +67,7 @@ cmake -S "$DIR" -B "$DIR/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSIO
 cmake --build "$DIR/build" --target owl -j"$(nproc)" >/dev/null
 
 BIN=$DIR/build/daemon/owl
-case "$("$BIN" -S intersect -R 12 -m 02:00:00:00:00:01 -F -E -h 2>&1 || true)" in
-  *"invalid option"*|*"-R takes"*|*"-m takes"*) echo "$BIN lacks -S, -R, -m, -F or -E; did the patches apply?"; exit 1 ;;
+case "$("$BIN" -S intersect -R mcs15-40-sgi -m 02:00:00:00:00:01 -F -E -A -V -h 2>&1 || true)" in
+  *"invalid option"*|*"-R takes"*|*"-m takes"*) echo "$BIN lacks -S, -R mcs15-40-sgi, -m, -F, -E, -A or -V; did the patches apply?"; exit 1 ;;
 esac
 echo "built $BIN: owl@${OWL_COMMIT:0:7} + $(ls "$ROOT"/patches/owl-*.patch | wc -l) patches"
