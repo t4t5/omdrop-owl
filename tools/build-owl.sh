@@ -29,6 +29,9 @@
 #                           MIFs, as iPadOS 27 sends them: Android's AWDL
 #                           (Quick Share) drops PSFs without it
 #                           (tests/owl_ht_caps.c)
+#   owl-13-rx-flags-init.patch  radiotap Flags read as 0 when a frame has
+#                           none, not whatever the stack held
+#                           (tests/owl_rx_flags.c)
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 

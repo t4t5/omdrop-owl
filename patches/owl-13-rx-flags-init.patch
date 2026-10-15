@@ -1,0 +1,13 @@
+diff --git a/src/rx.c b/src/rx.c
+index e036be1..1aed7d1 100644
+--- a/src/rx.c
++++ b/src/rx.c
+@@ -509,7 +509,7 @@ int awdl_rx(const struct buf *frame, struct buf ***data_frame, struct buf **data
+ 	uint16_t fc, qosc; /* frame and QoS control */
+ 	signed char rssi;
+ 	uint64_t tsft;
+-	uint8_t flags;
++	uint8_t flags = 0;
+ 
+ 	tsft = clock_time_us(); /* TODO Radiotap TSFT is more accurate but then need to access TSF in clock_time_us() */
+ 	if (radiotap_parse(frame, &rssi, &flags, NULL /* &tsft */) < 0)
