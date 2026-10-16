@@ -1,0 +1,137 @@
+diff --git a/src/peers.c b/src/peers.c
+index b505cbc..a592f2a 100644
+--- a/src/peers.c
++++ b/src/peers.c
+@@ -80,6 +80,7 @@ struct awdl_peer *awdl_peer_new(const struct ether_addr *addr) {
+ 	peer->has_sync_offset = 0;
+ 	peer->devclass = 0;
+ 	peer->version = 0;
++	peer->airdrop_port = 0;
+ 	peer->supports_v2 = 0;
+ 	peer->sent_mif = 0;
+ 	strcpy(peer->name, "");
+diff --git a/src/peers.h b/src/peers.h
+index 5c70e5a..5d037b6 100644
+--- a/src/peers.h
++++ b/src/peers.h
+@@ -61,6 +61,7 @@ struct awdl_peer {
+ 	struct ether_addr infra_addr;
+ 	uint8_t version;
+ 	uint8_t devclass;
++	uint16_t airdrop_port; /* announced by Android; 0 until then (Apple: 8770) */
+ 	uint8_t supports_v2 : 1;
+ 	uint8_t sent_mif : 1;
+ 	uint8_t is_valid : 1;
+diff --git a/src/rx.c b/src/rx.c
+index 1aed7d1..fa1f4e4 100644
+--- a/src/rx.c
++++ b/src/rx.c
+@@ -221,6 +221,86 @@ wire_error:
+ 	return RX_TOO_SHORT;
+ }
+ 
++/* AWDL shortens common DNS names to a two-byte code, 0xc000 + index, as in
++ * Wireshark's awdl_dns_compression. Android's Quick Share writes its AirDrop
++ * service names with them, mid-name. */
++static const char *const dns_codes[] = {
++	"", "_airplay._tcp.local", "_airplay._udp.local", "_airplay", "_raop._tcp.local",
++	"_raop._udp.local", "_raop", "_airdrop._tcp.local", "_airdrop._udp.local", "_airdrop",
++	"_tcp.local", "_udp.local", "local", "ip6.arpa", "ip4.arpa",
++};
++
++/* Expands the name in name[0..len) into out; its length, or -1 if it is
++ * malformed or does not fit. */
++static int dns_name(const uint8_t *name, int len, char *out, int size) {
++	int i = 0, n = 0;
++	while (i < len) {
++		const char *part;
++		int part_len;
++		if ((name[i] & 0xc0) == 0xc0) {
++			if (i + 2 > len || name[i] != 0xc0 || name[i + 1] >= sizeof(dns_codes) / sizeof(*dns_codes))
++				return -1;
++			part = dns_codes[name[i + 1]];
++			part_len = strlen(part);
++			i += 2;
++		} else {
++			part_len = name[i];
++			if (i + 1 + part_len > len)
++				return -1;
++			part = (const char *) name + i + 1;
++			i += 1 + part_len;
++		}
++		if (part_len == 0)
++			continue;
++		if (n + part_len + 1 >= size)
++			return -1;
++		if (n)
++			out[n++] = '.';
++		memcpy(out + n, part, part_len);
++		n += part_len;
++	}
++	return n;
++}
++
++/* Android's Quick Share, in AirDrop mode, serves on a random port and says so
++ * only here: a Service Response TLV holding the SRV record of its
++ * <instance>._airdrop._tcp.local, in every MIF. Apple devices publish none
++ * and listen on 8770. Anything that is not such a record is ignored, never an
++ * error: it must not cost the frame its other TLVs.
++ *
++ * Value: name length (LE16, counts the type byte), name, type, data length
++ * (LE16), two bytes, then the record: priority, weight, port (BE16), target. */
++int awdl_handle_service_response_tlv(struct awdl_peer *src, const struct buf *val,
++                                     struct awdl_state *state __attribute__((unused))) {
++	static const char service[] = "._airdrop._tcp.local";
++	const uint8_t *name, *srv;
++	uint16_t name_len, data_len, port;
++	uint8_t type;
++	char text[HOST_NAME_LENGTH_MAX + sizeof(service)];
++	int n;
++
++	READ_LE16(val, 0, &name_len);
++	if (name_len < 1)
++		return RX_IGNORE;
++	READ_BYTES(val, 2, &name, name_len - 1);
++	READ_U8(val, 1 + name_len, &type);
++	READ_LE16(val, 2 + name_len, &data_len);
++	READ_BYTES(val, 6 + name_len, &srv, data_len);
++	if (type != 33 /* SRV */ || data_len < 6)
++		return RX_IGNORE;
++	n = dns_name(name, name_len - 1, text, sizeof(text));
++	if (n <= (int) strlen(service) || memcmp(text + n - strlen(service), service, strlen(service)))
++		return RX_IGNORE;
++	port = (uint16_t) (srv[4] << 8 | srv[5]);
++	if (port && port != src->airdrop_port) {
++		src->airdrop_port = port;
++		log_info("peer %s airdrop port %u", ether_ntoa(&src->addr), port);
++	}
++	return RX_OK;
++wire_error:
++	return RX_IGNORE;
++}
++
+ int awdl_handle_tlv(struct awdl_peer *src, uint8_t type, const struct buf *val,
+                     struct awdl_state *state, uint64_t tsft) {
+ 	switch (type) {
+@@ -234,6 +314,8 @@ int awdl_handle_tlv(struct awdl_peer *src, uint8_t type, const struct buf *val,
+ 			return awdl_handle_election_params_v2_tlv(src, val, state);
+ 		case AWDL_ARPA_TLV:
+ 			return awdl_handle_arpa_tlv(src, val, state);
++		case AWDL_SERVICE_RESPONSE_TLV:
++			return awdl_handle_service_response_tlv(src, val, state);
+ 		case AWDL_DATA_PATH_STATE_TLV:
+ 			return awdl_handle_data_path_state_tlv(src, val, state);
+ 		case AWDL_VERSION_TLV:
+diff --git a/src/rx.h b/src/rx.h
+index 48fb5ac..2f517ab 100644
+--- a/src/rx.h
++++ b/src/rx.h
+@@ -54,6 +54,8 @@ int awdl_handle_data_path_state_tlv(struct awdl_peer *src, const struct buf *val
+ 
+ int awdl_handle_version_tlv(struct awdl_peer *src, const struct buf *val, struct awdl_state *state);
+ 
++int awdl_handle_service_response_tlv(struct awdl_peer *src, const struct buf *val, struct awdl_state *state);
++
+ int awdl_handle_tlv(struct awdl_peer *src, uint8_t type, const struct buf *val,
+                     struct awdl_state *state, uint64_t tsft);
+ 

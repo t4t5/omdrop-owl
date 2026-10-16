@@ -6,7 +6,7 @@
 #   omdrop-discoverable start <seconds>    become discoverable for N seconds (0: until stopped)
 #   omdrop-discoverable stop               stop advertising, tear down
 #   omdrop-discoverable status [--json]    {"visible":bool,"remaining":int|null,"reason":str,"rx_proven":bool,"peer_op":str}
-#   omdrop-discoverable peers              "<mac> rssi=?" per AWDL peer
+#   omdrop-discoverable peers              "<mac> rssi=? [port=<n>]" per AWDL peer
 #   omdrop-discoverable probe --json       what this backend is and what blocks it
 #                                          (unprivileged; omdrop's docs/radio-backend.md)
 #
@@ -343,17 +343,26 @@ cmd_status() {
 # signal strength is only in OWL's TRACE output, so it is reported as unknown;
 # send-to-peer and the omdrop CLI both list such peers as "? dBm". iPhones
 # randomise their AWDL address, so nothing here remembers one.
+#
+# A phone that serves AirDrop on a port of its own (Android's Quick Share) has
+# it logged as "peer <mac> airdrop port <n>" (owl-14), before or after its
+# "add peer", whichever MIF carries it first. It is reported as a trailing
+# port=<n>; Apple devices have none, and listen on 8770. send-to-peer reads it.
 cmd_peers() {
   [ -r "$OWL_LOG" ] || die "no OWL log at $OWL_LOG; is the radio up?" 4
   # "|| true": with no peer yet grep exits 1, pipefail made that the
   # command's status, and `omdrop send` gave up at once instead of waiting
   # for the phone to wake (2026-10-10).
-  { grep -oE '(add|remove) peer [0-9a-f:]+' "$OWL_LOG" || true; } | awk '
-    { n = split($3, o, ":"); mac = ""
+  { grep -oE '(add|remove) peer [0-9a-f:]+|peer [0-9a-f:]+ airdrop port [0-9]+' "$OWL_LOG" || true; } | awk '
+    function norm(s,   n, o, i, mac) {
+      n = split(s, o, ":")
       for (i = 1; i <= n; i++) mac = mac (i > 1 ? ":" : "") sprintf("%02s", o[i])
       gsub(/ /, "0", mac)
-      if ($1 == "add") seen[mac] = 1; else delete seen[mac] }
-    END { for (m in seen) print m " rssi=?" }'
+      return mac }
+    $1 == "peer" { port[norm($2)] = $5; next }
+    $1 == "add" { seen[norm($3)] = 1; next }
+    { delete seen[norm($3)]; delete port[norm($3)] }
+    END { for (m in seen) print m " rssi=?" (m in port ? " port=" port[m] : "") }'
 }
 
 # ---------------------------------------------------------------------- probe

@@ -1,0 +1,16 @@
+diff --git a/src/tx.c b/src/tx.c
+index 46a4cf3..8cc7a4f 100644
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -450,8 +450,9 @@ int awdl_init_full_action_frame(uint8_t *buf, struct awdl_state *state, struct i
+ 	ptr += awdl_init_chanseq_tlv(ptr, state);
+ 	ptr += awdl_init_election_params_v2_tlv(ptr, state);
+ 	ptr += awdl_init_service_params_tlv(ptr, state);
+-	if (type == AWDL_ACTION_MIF)
+-		ptr += awdl_init_ht_capabilities_tlv(ptr, state);
++	/* In every frame, as iPadOS 27 sends it: Google's AWDL daemon (Android
++	 * Quick Share) rejects a PSF without it ("AF didn't have required TLVs"). */
++	ptr += awdl_init_ht_capabilities_tlv(ptr, state);
+ 	if (type == AWDL_ACTION_MIF)
+ 		ptr += awdl_init_arpa_tlv(ptr, state);
+ 	ptr += awdl_init_data_path_state_tlv(ptr, state);

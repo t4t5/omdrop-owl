@@ -25,6 +25,16 @@
 #   owl-09-action-zero-padding.patch  accept the zero padding iPhones end
 #                           some MIFs with, instead of refusing the frame and
 #                           so never validating the peer (tests/owl_padding.c)
+#   owl-12-psf-ht-capabilities.patch  HT capabilities in PSFs too, not only
+#                           MIFs, as iPadOS 27 sends them: Android's AWDL
+#                           (Quick Share) drops PSFs without it
+#                           (tests/owl_ht_caps.c)
+#   owl-13-rx-flags-init.patch  radiotap Flags read as 0 when a frame has
+#                           none, not whatever the stack held
+#                           (tests/owl_rx_flags.c)
+#   owl-14-airdrop-port.patch  log "peer <mac> airdrop port N" from the SRV
+#                           record in a peer's Service Response TLV: Android
+#                           serves AirDrop on a random port (tests/owl_airdrop_port.c)
 # Applied in name order: each is a diff against the tree with the previous ones.
 set -eu
 
