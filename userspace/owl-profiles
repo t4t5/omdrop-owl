@@ -12,6 +12,9 @@
 #              active-monitor: exclusive, but with an active monitor in place of
 #              the ad-hoc interface, for cards with no ad-hoc mode. Channel 6
 #              only, and needs mon_mac station
+#              go: opt-in exclusive P2P-GO transmit anchor with passive and
+#              active monitors on the group MAC. Channel 6 only, needs
+#              mon_mac station and wpa_supplicant; see README
 #   mon_mac    station: the monitor interface carries the station's MAC, and OWL
 #              reads it from there; own: it keeps a MAC of its own and OWL is
 #              given the station's (owl -m)

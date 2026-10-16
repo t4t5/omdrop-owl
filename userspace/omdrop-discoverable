@@ -32,6 +32,8 @@
 # "active-monitor" is exclusive too, but with no ad-hoc vif: the monitor vif is
 # an active one, which ACKs the phone's unicast itself (MediaTek MT7921 and
 # MT7922, MT7612U): see monitor_up.
+# "go" releases the station too, but creates a temporary P2P-GO group and
+# aliases a passive/active monitor pair to its MAC: see go_up.
 #
 # ROOT: required. Callers come through pkexec, which drops the environment, so
 # everything lives at fixed paths: helpers beside this script (/usr/lib/omdrop
@@ -45,6 +47,7 @@ CONF=${OMDROP_CONF:-/etc/omdrop}
 OWL_LOG=$RUN/owl.log
 IF=awdl0
 MON=mon0
+ACTIVE=mon1
 IBSS=awdlibss0
 AWDL_BSSID=00:25:00:ff:94:73
 OWL_BIN=$LIB/owl
@@ -87,9 +90,9 @@ need_root() { [ "$(id -u)" = 0 ] || die "must run as root (through pkexec)" 2; }
 # The Wi-Fi station: $CONF/infra-iface, else the first managed interface.
 station_iface() {
   local forced d name
-  # A station turned into the cell or a monitor (exclusive_up) isn't managed
-  # until stop.
-  [ -e "$RUN/converted" ] || [ -e "$RUN/monitor" ] && { cat "$RUN/exclusive"; return; }
+  # A station taken for an exclusive window may no longer be managed
+  # (cell, monitor or GO); retain its recorded name until stop.
+  [ -e "$RUN/converted" ] || [ -e "$RUN/monitor" ] || [ -e "$RUN/p2p.pid" ] && { cat "$RUN/exclusive"; return; }
   forced=$(knob infra-iface)
   [ -n "$forced" ] && { echo "$forced"; return; }
   for d in /sys/class/net/*/phy80211; do
@@ -130,6 +133,88 @@ active_monitor_problem() {  # PHY
     || echo "This Wi-Fi card's profile asks for active-monitor mode, but the card doesn't support an active monitor."
 }
 
+# GO is an explicit profile override, not a driver-specific fallback.
+go_problem() {  # PHY
+  local info
+  [ "$PROF_MONMAC" = station ] || { echo "GO mode needs mon_mac station (the monitors use the group's MAC)."; return; }
+  command -v wpa_supplicant >/dev/null && command -v wpa_cli >/dev/null \
+    || { echo "GO mode needs wpa_supplicant and wpa_cli installed."; return; }
+  info=$(iw phy "$1" info 2>/dev/null)
+  grep -q 'Device supports active monitor' <<< "$info" \
+    && grep -q '^[[:space:]]*\* P2P-GO$' <<< "$info" \
+    || echo "GO mode needs P2P-GO and active-monitor support on this card."
+}
+
+# Select by phy and type, not a driver-dependent interface name. Refuse an
+# existing group rather than claiming someone else's Wi-Fi Direct session.
+go_interface() {  # PHY
+  iw dev | awk -v phy="${1#phy}" '
+    /^phy#/ { current = substr($1, 5) }
+    /Interface/ { name = $2 }
+    /type P2P-GO/ { if (current == phy) { print name; exit } }'
+}
+
+# A temporary Wi-Fi Direct group supplies a transmit channel on cards where
+# monitor-only injection stalls. Its MAC aliases the passive and active
+# monitors; OWL uses the active one. Tested on MT7922, selectable on any driver.
+# exclusive_up has already released the station from NetworkManager.
+go_up() {  # STA PHY
+  local sta=$1 phy=$2 group mac i
+  [ -z "$(go_interface "$phy")" ] || return 1
+  # Do not delete a pre-existing active monitor during failed-start cleanup.
+  iw dev "$ACTIVE" info >/dev/null 2>&1 && return 1
+  ip link set "$sta" up || return 1
+  mkdir -p "$RUN/p2p-control"
+  cat > "$RUN/p2p.conf" <<EOF
+ctrl_interface=$RUN/p2p-control
+update_config=0
+device_name=omdrop-radio
+device_type=1-0050F204-1
+p2p_go_intent=15
+EOF
+  chmod 600 "$RUN/p2p.conf"
+  # Do not leak the helper's flock into the long-lived daemon, or stop hangs.
+  wpa_supplicant -B -D nl80211 -i "$sta" -c "$RUN/p2p.conf" -P "$RUN/p2p.pid" -f "$RUN/p2p.log" >> "$RUN/p2p-bootstrap.log" 2>&1 9>&- || return 1
+  wpa_cli -p "$RUN/p2p-control" -i "$sta" p2p_group_add freq=2437 | grep -qx OK || return 1
+  for i in $(seq 60); do
+    group=$(go_interface "$phy")
+    [ -n "$group" ] && break
+    sleep .1
+  done
+  [ -n "$group" ] || return 1
+  echo "$group" > "$RUN/p2p-interface"
+  nmcli device set "$group" managed no >/dev/null 2>&1
+  mac=$(cat "/sys/class/net/$group/address") || return 1
+  : > "$RUN/go-monitors"
+  iw phy "$phy" interface add "$MON" type monitor || return 1
+  ip link set "$MON" address "$mac" || return 1
+  ip link set "$MON" up || return 1
+  iw phy "$phy" interface add "$ACTIVE" type monitor flags active || return 1
+  ip link set "$ACTIVE" address "$mac" || return 1
+  ip link set "$ACTIVE" up || return 1
+  echo 2437
+}
+
+go_down() {
+  local pid group
+  if [ -e "$RUN/go-monitors" ]; then
+    ip link set "$ACTIVE" down 2>/dev/null
+    iw dev "$ACTIVE" del 2>/dev/null
+    rm -f "$RUN/go-monitors"
+  fi
+  pid=$(cat "$RUN/p2p.pid" 2>/dev/null)
+  if alive "$pid" "$RUN/p2p.conf"; then
+    kill "$pid" 2>/dev/null
+    for _ in $(seq 30); do alive "$pid" "$RUN/p2p.conf" || break; sleep .1; done
+    alive "$pid" "$RUN/p2p.conf" && kill -KILL "$pid" 2>/dev/null
+  fi
+  group=$(cat "$RUN/p2p-interface" 2>/dev/null)
+  [ -n "$group" ] && iw dev "$group" del 2>/dev/null
+  rm -f "$RUN/p2p.pid" "$RUN/p2p-interface"
+  rm -rf "$RUN/p2p-control"
+  return 0
+}
+
 mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/class/net/$1/phy80211")")/mt76"; }
 
 # ------------------------------------------------------------- exclusive mode
@@ -146,7 +231,7 @@ mt76_dir() { echo "/sys/kernel/debug/ieee80211/$(basename "$(readlink -f "/sys/c
 # capture), while on 6 115 of 121 did, and the phone ACKed 100.
 tx_channels() {  # PHY
   local ok c order="5220 5745 2437"
-  [ "${PROF_MODE:-}" = active-monitor ] && order=2437
+  case "${PROF_MODE:-}" in active-monitor|go) order=2437 ;; esac
   ok=$(iw phy "$1" channels 2>/dev/null | awk '
     /^[[:space:]]*\* [0-9]+ MHz/ { if (f && ok) print f; f = $2; ok = !/disabled/; next }
     /No IR|Radar detection/ { ok = 0 }
@@ -186,6 +271,10 @@ exclusive_up() {  # STA PHY FREQ...
   nmcli -g GENERAL.CON-UUID device show "$sta" > "$RUN/connection" 2>/dev/null
   nmcli device set "$sta" managed no >/dev/null 2>&1
   ip link set "$sta" down
+  if [ "${PROF_MODE:-}" = go ]; then
+    go_up "$sta" "$phy"
+    return
+  fi
   if [ "${PROF_MODE:-}" = active-monitor ]; then
     monitor_up "$sta" "$phy" "$@"
     return
@@ -377,6 +466,9 @@ cmd_probe() {
     [ -x "$OWL_BIN" ] || missing+=("backend|omdrop-owl is installed without OWL ($OWL_BIN). Reinstall omdrop-owl.")
     case "$PROF_MODE" in
       shared|exclusive) ;;
+      go)
+        problem=$(go_problem "$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")")
+        [ -z "$problem" ] || missing+=("backend|$problem") ;;
       active-monitor)
         problem=$(active_monitor_problem "$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")")
         [ -z "$problem" ] || missing+=("backend|$problem") ;;
@@ -384,7 +476,7 @@ cmd_probe() {
     esac
     ap=$(iw dev "$sta" link 2>/dev/null | awk '/freq:/ {print int($2)}')
     case "$PROF_MODE:$ap" in
-      exclusive:*|active-monitor:*|*:2437|*:5220|*:5745) ;;
+      exclusive:*|active-monitor:*|go:*|*:2437|*:5220|*:5745) ;;
       *:) missing+=("radio|Wi-Fi isn't connected, and AirDrop shares its channel. Connect to Wi-Fi first.") ;;
       *) missing+=("radio|Your Wi-Fi network is on $ap MHz, but AirDrop can only share channel 6, 44 or 149 with it. Moving the router to one of those makes this work.") ;;
     esac
@@ -413,6 +505,7 @@ cmd_stop() {
   pkill -f "^$OWL_BIN " 2>/dev/null
   ip link set "$MON" down 2>/dev/null
   iw dev "$MON" del 2>/dev/null
+  go_down
   exclusive_down || log "could not make $(cat "$RUN/exclusive") a station again; start will retry"
   sta=$(cat "$RUN/station" 2>/dev/null)
   pm=$(cat "$RUN/pm" 2>/dev/null)
@@ -466,6 +559,10 @@ supervise() {
       log "$MON is gone; the driver may have reloaded"
       exec "$SELF" stop radio-lost
     fi
+    if [ -e "$RUN/go-monitors" ] && ! ip link show "$ACTIVE" >/dev/null 2>&1; then
+      log "$ACTIVE is gone; the GO radio can no longer inject"
+      exec "$SELF" stop radio-lost
+    fi
     python3 "$LIB/awdl-airdrop-adv.py" --iface "$IF" --plain --flags "$ADV_FLAGS" --port 8771 \
       $burst >> "$RUN/announce.log" 2>&1
     sleep "$ADV_INTERVAL"
@@ -474,7 +571,7 @@ supervise() {
 
 cmd_start() {
   local secs=${1:-} sta drv phy gw ap freqs chan stamac monmac mt76 problem _
-  local owl_extra=() strategy=intersect
+  local owl_extra=() strategy=intersect owl_iface=$MON
   [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: omdrop-discoverable start <seconds>" 2
   need_root
   mkdir -p "$RUN"
@@ -491,7 +588,8 @@ cmd_start() {
   : > "$RUN/announce.log"
   # A station the last stop couldn't turn back still holds the cell, or is
   # still a monitor, and exclusive_up would take its state for the original.
-  if [ -e "$RUN/converted" ] || [ -e "$RUN/monitor" ]; then
+  # Also recover an interrupted GO setup before starting a fresh supplicant.
+  if [ -e "$RUN/converted" ] || [ -e "$RUN/monitor" ] || [ -e "$RUN/p2p.pid" ] || [ -e "$RUN/p2p-interface" ] || [ -e "$RUN/go-monitors" ]; then
     cmd_stop recovered >/dev/null
     [ -e "$RUN/converted" ] || [ -e "$RUN/monitor" ] && die "Wi-Fi ($(cat "$RUN/exclusive")) is still set up for the last window and couldn't be switched back. Restarting the computer fixes it." 4
   fi
@@ -508,6 +606,7 @@ cmd_start() {
   phy=$(basename "$(readlink -f "/sys/class/net/$sta/phy80211")")
   case "$PROF_MODE" in
     shared|exclusive) ;;
+    go) problem=$(go_problem "$phy"); [ -z "$problem" ] || die "$problem" 4 ;;
     active-monitor) problem=$(active_monitor_problem "$phy"); [ -z "$problem" ] || die "$problem" 4 ;;
     *) die "this Wi-Fi card's profile asks for \"$PROF_MODE\" mode, which omdrop-owl doesn't implement yet" 4 ;;
   esac
@@ -520,6 +619,7 @@ cmd_start() {
     # From here a failure has to give Wi-Fi back, which is cmd_stop's job.
     if ! ap=$(exclusive_up "$sta" "$phy" $freqs); then
       cmd_stop start-failed >/dev/null
+      [ "$PROF_MODE" = go ] && die "could not start the P2P-GO group and monitors on channel 6" 4
       [ "$PROF_MODE" = active-monitor ] && die "could not set up the active monitor $MON on channel 6" 4
       die "could not start the ad-hoc interface $IBSS on any of AirDrop's channels" 4
     fi
@@ -540,11 +640,12 @@ cmd_start() {
     *) die "your Wi-Fi network is on ${ap:-an unknown} MHz, but AirDrop can only share channel 6, 44 or 149 with it. Moving the router to one of those makes this work." 3 ;;
   esac
   stamac=$(cat "/sys/class/net/$sta/address")
+  [ "$PROF_MODE" != go ] || stamac=$(cat "/sys/class/net/$(cat "$RUN/p2p-interface")/address")
   echo "$sta" > "$RUN/station"
   log "station $sta ($stamac, $drv) on ch$chan, gateway $gw; profile: mode=$PROF_MODE mon_mac=$PROF_MONMAC reconnect=$PROF_RECONNECT mt76_pm=$PROF_PM"
 
-  # An active monitor's mon0 is up already (monitor_up).
-  if [ "$PROF_MODE" != active-monitor ]; then
+  # active-monitor and go have already brought their monitors up.
+  if [ "$PROF_MODE" != active-monitor ] && [ "$PROF_MODE" != go ]; then
     iw dev "$MON" del 2>/dev/null
     if ! iw phy "$phy" interface add "$MON" type monitor; then
       cmd_stop start-failed >/dev/null
@@ -573,6 +674,10 @@ cmd_start() {
   if [ "$PROF_MODE" != shared ]; then
     owl_extra+=(-F -E)
     strategy=pin
+    if [ "$PROF_MODE" = go ]; then
+      owl_iface=$ACTIVE
+      strategy=intersect
+    fi
   fi
 
   # mt76_pm: runtime PM off for the window, restored by stop.
@@ -587,7 +692,7 @@ cmd_start() {
   if [ "$secs" -gt 0 ]; then echo $(( $(date +%s) + secs )) > "$RUN/until"; else echo 0 > "$RUN/until"; fi
   # 9>&-: children must not inherit the lock, or the long-lived ones would hold
   # it for the whole window and the next `stop` would wait forever.
-  setsid "$OWL_BIN" -i "$MON" -c "$chan" -N -S "$strategy" "${owl_extra[@]}" -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
+  setsid "$OWL_BIN" -i "$owl_iface" -c "$chan" -N -S "$strategy" "${owl_extra[@]}" -v > "$OWL_LOG" 2>&1 < /dev/null 9>&- &
   echo $! > "$RUN/owl.pid"
   # 50 ms polls: OWL creates it in well under a second, and 0.5 s steps cost up to 0.5 s.
   for _ in $(seq 200); do ip link show "$IF" >/dev/null 2>&1 && break; sleep 0.05; done

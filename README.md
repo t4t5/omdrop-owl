@@ -126,6 +126,43 @@ Received files land in `~/Downloads`.
 One card name can cover chips that behave differently, so a report from a machine, PCI ID
 (`lspci -nn`) or kernel not listed here helps too.
 
+### Opt-in P2P-GO mode
+
+If a card supports Wi-Fi Direct and active monitors but its existing mode
+stalls, you can try `go` in `/etc/omdrop/owl-profiles`. This is a generic profile
+mode; no packaged driver selects it automatically. For example, to try it on
+an MT7922 (`mt7921e`):
+
+```sh
+sudo mkdir -p /etc/omdrop
+# Add or replace your driver's line; preserve overrides for other drivers.
+sudoedit /etc/omdrop/owl-profiles
+# Line to add:
+# mt7921e untested go station no yes
+printf '1\n' | sudo tee /etc/omdrop/allow-untested
+```
+
+Use your own driver's name for other cards. `station` is required in the
+`mon_mac` column: in this mode both monitors use the **group's** MAC instead of
+the station's. The last `yes` disables mt76 power management during the window;
+use `no` for other drivers. `wpa_supplicant` and `wpa_cli` must be installed.
+The card must support P2P-GO, active monitors, their simultaneous interface
+combination, and transmission on channel 6 under the current regulatory rules.
+
+This takes normal Wi-Fi offline during the window. A separate temporary
+supplicant creates a Wi-Fi Direct group on channel 6; OWL injects through an
+active monitor alongside a passive monitor, both on the group's MAC, with
+`-N -S intersect -F -E`. Stop, expiry and failed startup tear down the monitors
+and group, terminate the owned supplicant, and return the station to
+NetworkManager using the existing exclusive-mode recovery. An existing group
+on the radio is refused rather than adopted.
+
+The original local implementation completed Mac/iPhone receives, a Linux-to-Mac
+send, and expiry cleanup on one MT7922; see
+[the validation notes](docs/go-validation.md). Other cards and this rebased
+implementation still need live hardware validation. To undo the opt-in, restore
+or remove your override line; the packaged profile takes effect again.
+
 ### Adding your card
 
 What omdrop-owl does on each Wi-Fi driver comes from

@@ -20,7 +20,7 @@ ARCH=$(dpkg --print-architecture)
 # PKGBUILD's depends, by their Debian names. The shared libraries OWL links
 # against are added by dpkg-shlibdeps.
 DEPENDS="bash, python3, iproute2, iputils-ping, iw, pkexec, polkitd, util-linux, procps,
- network-manager, keyutils, python3-libarchive-c, python3-pil, python3-zeroconf,
+ network-manager, keyutils, wpasupplicant, python3-libarchive-c, python3-pil, python3-zeroconf,
  python3-ifaddr, bluez, python3-dbus, python3-gi"
 
 "$ROOT/tools/build-owl.sh"

@@ -11,7 +11,7 @@ validate_table() {  # FILE -> awk exits nonzero on any violation
       bad = 0
       if (NF < 6) bad = 1
       if ($2 != "tested" && $2 != "untested") bad = 1
-      if ($3 != "shared" && $3 != "exclusive" && $3 != "active-monitor") bad = 1
+      if ($3 != "shared" && $3 != "exclusive" && $3 != "active-monitor" && $3 != "go") bad = 1
       if ($4 != "station" && $4 != "own") bad = 1
       if ($5 != "yes" && $5 != "no") bad = 1
       if ($6 != "yes" && $6 != "no") bad = 1
@@ -67,4 +67,10 @@ validate_table() {  # FILE -> awk exits nonzero on any violation
   run validate_table "$TMP/dup"
   [ "$status" -eq 1 ]
   [[ "$output" == *"duplicate"* ]]
+}
+
+@test "the validator accepts an opt-in GO override" {
+  printf 'example_driver untested go station no no\n* untested shared station yes no\n' > "$TMP/go"
+  run validate_table "$TMP/go"
+  [ "$status" -eq 0 ]
 }

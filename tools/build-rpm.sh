@@ -22,7 +22,7 @@ ARCH=$(uname -m)
 # names). The shared libraries OWL links (libev, libnl3, libpcap) are added by
 # rpmbuild's automatic dependency generation, as dpkg-shlibdeps does for deb.
 REQUIRES="bash python3 iproute iputils iw polkit util-linux procps-ng
- NetworkManager keyutils python3-libarchive-c python3-pillow python3-zeroconf
+ NetworkManager keyutils wpa_supplicant python3-libarchive-c python3-pillow python3-zeroconf
  python3-ifaddr bluez python3-dbus python3-gobject"
 # One space-separated line for the spec's Requires:.
 REQ=$(echo $REQUIRES)

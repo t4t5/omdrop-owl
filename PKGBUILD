@@ -18,7 +18,7 @@ url="https://github.com/t4t5/omdrop-owl"
 # ISC; omdrop-awdl's tools GPL-2.0-only. They ship as separate programs.
 license=('GPL-3.0-or-later' 'GPL-2.0-only' 'ISC')
 depends=('bash' 'python' 'iproute2' 'iputils' 'iw' 'polkit' 'util-linux' 'procps-ng'
-         'libpcap' 'libev' 'libnl' 'networkmanager' 'keyutils'
+         'libpcap' 'libev' 'libnl' 'networkmanager' 'keyutils' 'wpa_supplicant'
          'python-libarchive-c' 'python-pillow' 'python-zeroconf' 'python-ifaddr'
          'bluez' 'python-dbus' 'python-gobject')
 makedepends=('git' 'cmake' 'gcc')

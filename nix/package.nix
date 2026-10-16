@@ -22,6 +22,7 @@
   procps,
   systemd,
   util-linux,
+  wpa_supplicant,
 }:
 
 let
@@ -59,6 +60,7 @@ let
     procps
     systemd
     util-linux
+    wpa_supplicant
   ];
 
   fromAwdl = [
