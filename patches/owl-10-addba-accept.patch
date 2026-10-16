@@ -1,0 +1,222 @@
+diff --git a/daemon/core.c b/daemon/core.c
+index 214c80d..0862603 100644
+--- a/daemon/core.c
++++ b/daemon/core.c
+@@ -110,6 +110,18 @@ void host_device_ready(struct ev_loop *loop, ev_io *handle, int revents) {
+ 		awdl_send_unicast(loop, &state->ev_state.tx_timer, 0);
+ }
+ 
++static void awdl_send_addba_response(struct daemon_state *state) {
++	uint8_t buf[256];
++	const struct awdl_state *awdl = &state->awdl_state;
++	int len = awdl_init_addba_response(buf, awdl, &state->ieee80211_state);
++
++	log_debug("Block Ack session accepted for peer %s (TID %u, window %u)", ether_ntoa(&awdl->addba.peer),
++	          (unsigned) ((awdl->addba.params >> 2) & 0xf),
++	          (unsigned) (((awdl->addba.params >> 6) & 0x3ff) ? ((awdl->addba.params >> 6) & 0x3ff) : 64));
++	wlan_send(&state->io, buf, len);
++	state->awdl_state.stats.tx_action++;
++}
++
+ void awdl_receive_frame(uint8_t *user, const struct pcap_pkthdr *hdr, const uint8_t *buf) {
+ #define MAX_NUM_AMPDU 16 /* TODO lookup this constant from the standard */
+ 	struct daemon_state *state = (void *) user;
+@@ -118,6 +130,8 @@ void awdl_receive_frame(uint8_t *user, const struct pcap_pkthdr *hdr, const uint
+ 	struct buf *data_arr[MAX_NUM_AMPDU];
+ 	struct buf **data = &data_arr[0];
+ 	result = awdl_rx(frame, &data, &data_arr[MAX_NUM_AMPDU], &state->awdl_state);
++	if (result == RX_ADDBA)
++		awdl_send_addba_response(state);
+ 	/* An A-MSDU that fails part way has converted the subframes before the
+ 	 * failure: free those too, unsent. */
+ 	for (struct buf **data_start = &data_arr[0]; data_start < data; data_start++) {
+diff --git a/daemon/owl.c b/daemon/owl.c
+index d65cd29..ccab874 100644
+--- a/daemon/owl.c
++++ b/daemon/owl.c
+@@ -94,6 +94,7 @@ int main(int argc, char *argv[]) {
+ 	int fixed_radio = 0;
+ 	int metric_first = 0;
+ 	int no_monitor_mode = 0;
++	int accept_addba = 0;
+ 	enum awdl_chanseq_strategy strategy = AWDL_CHANSEQ_VERBATIM;
+ 	int widen_max = 4;
+ 	struct ether_addr addr_override;
+@@ -106,7 +107,7 @@ int main(int argc, char *argv[]) {
+ 
+ 	struct daemon_state state;
+ 
+-	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:FE")) != -1) {
++	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:FEA")) != -1) {
+ 		switch (c) {
+ 			case 'm': {
+ 				/* Our AWDL address, instead of the monitor interface's MAC. On
+@@ -197,6 +198,11 @@ int main(int argc, char *argv[]) {
+ 			case 'N':
+ 				no_monitor_mode = 1;
+ 				break;
++			case 'A':
++				/* Accept a peer's Block Ack session request, so it may
++				 * aggregate (src/rx.c, awdl_send_addba_response). */
++				accept_addba = 1;
++				break;
+ 			case '?':
+ 				if (optopt == 'i')
+ 					fprintf(stderr, "Option -%c needs to specify a wireless interface.\n", optopt);
+@@ -281,6 +287,9 @@ int main(int argc, char *argv[]) {
+ 	state.awdl_state.channel.widen_max = widen_max;
+ 	state.awdl_state.channel.fixed_radio = fixed_radio;
+ 	state.awdl_state.election.metric_first = metric_first;
++	state.awdl_state.accept_addba = accept_addba;
++	if (accept_addba)
++		log_info("Block Ack: accepting session requests (A-MPDU)");
+ 	if (metric_first)
+ 		log_info("election: by metric, then counter");
+ 	if (fixed_radio)
+diff --git a/src/ieee80211.h b/src/ieee80211.h
+index 2a2dbc3..23c5812 100644
+--- a/src/ieee80211.h
++++ b/src/ieee80211.h
+@@ -58,6 +58,11 @@ struct oui {
+ #define IEEE80211_STYPE_DEAUTH		0x00C0
+ #define IEEE80211_STYPE_ACTION		0x00D0
+ 
++/* Block Ack action frames (802.11-2016 9.6.5) */
++#define IEEE80211_CATEGORY_BACK		3
++#define IEEE80211_ACTION_ADDBA_REQ	0
++#define IEEE80211_ACTION_ADDBA_RESP	1
++
+ /* control */
+ #define IEEE80211_STYPE_CTL_EXT		0x0060
+ #define IEEE80211_STYPE_BACK_REQ	0x0080
+diff --git a/src/rx.c b/src/rx.c
+index e036be1..4e5dfcd 100644
+--- a/src/rx.c
++++ b/src/rx.c
+@@ -279,6 +279,23 @@ int awdl_rx_action(const struct buf *frame, signed char rssi, uint64_t tsft,
+ 
+ 	(void) dst; /* TODO ignore destination address for now, could be used to mitigate desynchronization attack */
+ 
++	/* A Block Ack session request (ADDBA Request: category 3, action 0) to
++	 * us: dialog token, parameter set, timeout, starting sequence control.
++	 * An iPhone asks dozens of times during a transfer and, unanswered,
++	 * sends no A-MPDU (0 of 21,941 frames, 2026-10-14). */
++	if (buf_len(frame) >= 9) {
++		const uint8_t *body = buf_data(frame);
++		if (body[0] == IEEE80211_CATEGORY_BACK && body[1] == IEEE80211_ACTION_ADDBA_REQ) {
++			if (!state->accept_addba || memcmp(dst, &state->self_address, sizeof(struct ether_addr)))
++				return RX_IGNORE;
++			state->addba.peer = *src;
++			state->addba.token = body[2];
++			state->addba.params = (uint16_t) (body[3] | body[4] << 8);
++			state->addba.timeout = (uint16_t) (body[5] | body[6] << 8);
++			return RX_ADDBA;
++		}
++	}
++
+ 	subtype = awdl_parse_action_hdr(frame);
+ 	if (subtype < 0) {
+ 		log_trace("awdl_action: not an action frame"); /* could be block ACK */
+diff --git a/src/rx.h b/src/rx.h
+index 48fb5ac..4cd9cfc 100644
+--- a/src/rx.h
++++ b/src/rx.h
+@@ -25,6 +25,7 @@
+ #include "state.h"
+ 
+ enum RX_RESULT {
++	RX_ADDBA = 7, /* a Block Ack session request to us, in state->addba: answer it */
+ 	RX_IGNORE_PEER = 6,
+ 	RX_IGNORE_RSSI = 5,
+ 	RX_IGNORE_FAILED_CRC = 4,
+diff --git a/src/state.c b/src/state.c
+index 7bfddb5..9b7c725 100644
+--- a/src/state.c
++++ b/src/state.c
+@@ -48,6 +48,7 @@ void awdl_init_state(struct awdl_state *state, const char *hostname, const struc
+ 	state->peer_remove_cb_data = 0;
+ 
+ 	state->filter_rssi = 1;
++	state->accept_addba = 0;
+ 	state->rssi_threshold = RSSI_THRESHOLD_DEFAULT;
+ 	state->rssi_grace = RSSI_GRACE_DEFAULT;
+ 
+diff --git a/src/state.h b/src/state.h
+index b5a0570..191cf5a 100644
+--- a/src/state.h
++++ b/src/state.h
+@@ -74,6 +74,18 @@ struct awdl_state {
+ 	void *peer_remove_cb_data;
+ 
+ 	int filter_rssi; /* whether or not to filter (default: true) */
++
++	/* -A: answer a peer's Block Ack session request (ADDBA) with success, so
++	 * it may send A-MPDUs. Off, the request goes unanswered and the peer
++	 * sends every frame on its own. The request waits in addba until the
++	 * daemon has sent the response. */
++	int accept_addba;
++	struct {
++		struct ether_addr peer;
++		uint8_t token;
++		uint16_t params; /* Block Ack Parameter Set, as requested */
++		uint16_t timeout;
++	} addba;
+ 	signed char rssi_threshold; /* peers exceeding this threshold are discovered */
+ 	signed char rssi_grace; /* once discovered accept lower RSSI */
+ 
+diff --git a/src/tx.c b/src/tx.c
+index 46a4cf3..ac38c2e 100644
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -438,6 +438,35 @@ int ieee80211_add_fcs(const uint8_t *start, uint8_t *end) {
+ 	return sizeof(uint32_t);
+ }
+ 
++int awdl_init_addba_response(uint8_t *buf, const struct awdl_state *state,
++                             struct ieee80211_state *ieee80211_state) {
++	uint8_t *ptr = buf;
++	uint16_t size = (state->addba.params >> 6) & 0x3ff;
++	uint16_t params;
++
++	if (size == 0 || size > 64)
++		size = 64;
++	/* bit 0 A-MSDU supported (no), bit 1 immediate Block Ack, bits 2-5 TID,
++	 * bits 6-15 buffer size */
++	params = (uint16_t) ((state->addba.params & 0x003c) | 0x0002 | (size << 6));
++
++	ptr += ieee80211_init_radiotap_header(ptr);
++	ptr += ieee80211_init_awdl_action_hdr(ptr, &state->self_address, &state->addba.peer, ieee80211_state);
++	*ptr++ = IEEE80211_CATEGORY_BACK;
++	*ptr++ = IEEE80211_ACTION_ADDBA_RESP;
++	*ptr++ = state->addba.token;
++	*ptr++ = 0; /* status: success */
++	*ptr++ = 0;
++	*ptr++ = (uint8_t) (params & 0xff);
++	*ptr++ = (uint8_t) (params >> 8);
++	*ptr++ = (uint8_t) (state->addba.timeout & 0xff);
++	*ptr++ = (uint8_t) (state->addba.timeout >> 8);
++	if (ieee80211_state->fcs)
++		ptr += ieee80211_add_fcs(buf, ptr);
++
++	return ptr - buf;
++}
++
+ int awdl_init_full_action_frame(uint8_t *buf, struct awdl_state *state, struct ieee80211_state *ieee80211_state,
+                                 enum awdl_action_type type) {
+ 	uint8_t *ptr = buf;
+diff --git a/src/tx.h b/src/tx.h
+index f9df0eb..0f0c7ba 100644
+--- a/src/tx.h
++++ b/src/tx.h
+@@ -80,6 +80,11 @@ int ieee80211_format_tx_rate(char *buf, size_t len, const struct ieee80211_tx_ra
+ 
+ int ieee80211_init_radiotap_header(uint8_t *buf);
+ 
++/* An ADDBA Response accepting state->addba: immediate Block Ack, the
++ * requested TID, no A-MSDU inside A-MPDU, a window of at most 64. */
++int awdl_init_addba_response(uint8_t *buf, const struct awdl_state *state,
++                             struct ieee80211_state *ieee80211_state);
++
+ int ieee80211_init_radiotap_header_rate(uint8_t *buf, const struct ieee80211_tx_rate *rate);
+ 
+ int ieee80211_init_awdl_hdr(uint8_t *buf, const struct ether_addr *src, const struct ether_addr *dst,

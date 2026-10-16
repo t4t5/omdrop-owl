@@ -473,7 +473,7 @@ supervise() {
 }
 
 cmd_start() {
-  local secs=${1:-} sta drv phy gw ap freqs chan stamac monmac mt76 problem _
+  local secs=${1:-} sta drv phy gw ap freqs chan stamac monmac mt76 problem aggregation _
   local owl_extra=() strategy=intersect
   [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: omdrop-discoverable start <seconds>" 2
   need_root
@@ -573,6 +573,16 @@ cmd_start() {
   if [ "$PROF_MODE" != shared ]; then
     owl_extra+=(-F -E)
     strategy=pin
+  fi
+  # owl -A (patches/owl-10-addba-accept.patch): accept the phone's Block Ack
+  # session request, so it sends A-MPDUs. Unanswered, an iPhone asked 61
+  # times in a 30 MB upload and sent all 21,941 frames singly. The MT7612U's
+  # active monitor answers each A-MPDU with a Block Ack itself, and the upload
+  # took 14 s instead of 47 s on 149; on by default there, as other cards
+  # haven't been measured. $CONF/aggregation 1 or 0 overrides.
+  aggregation=$(knob aggregation)
+  if [ "$aggregation" = 1 ] || { [ -z "$aggregation" ] && [ "$PROF_MODE" = active-monitor ] && [ "$drv" = mt76x2u ]; }; then
+    owl_extra+=(-A)
   fi
 
   # mt76_pm: runtime PM off for the window, restored by stop.
