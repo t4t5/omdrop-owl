@@ -1,0 +1,104 @@
+diff --git a/src/frame.h b/src/frame.h
+index e4fc8cc..c128fd1 100644
+--- a/src/frame.h
++++ b/src/frame.h
+@@ -185,13 +185,34 @@ struct awdl_ht_capabilities_tlv {
+ } __attribute__((__packed__));
+ 
+ enum awdl_data_path_state_flags {
+-	AWDL_DATA_PATH_FLAG_COUNTRY_CODE = 0x0100,
+-	AWDL_DATA_PATH_FLAG_SOCIAL_CHANNEL_MAP = 0x0200,
+ 	AWDL_DATA_PATH_FLAG_INFRA_INFO = 0x0001,
+ 	AWDL_DATA_PATH_FLAG_INFRA_ADDRESS = 0x0002,
+ 	AWDL_DATA_PATH_FLAG_AWDL_ADDRESS = 0x0004,
++	AWDL_DATA_PATH_FLAG_RSDB = 0x0008,
+ 	AWDL_DATA_PATH_FLAG_UMI = 0x0010,
+-	/* TODO complete */
++	AWDL_DATA_PATH_FLAG_DUALBAND = 0x0020,
++	AWDL_DATA_PATH_FLAG_AIRPLAY_SINK = 0x0040,
++	AWDL_DATA_PATH_FLAG_FOLLOW_CHAN_SEQ = 0x0080,
++	AWDL_DATA_PATH_FLAG_COUNTRY_CODE = 0x0100,
++	AWDL_DATA_PATH_FLAG_SOCIAL_CHANNEL_MAP = 0x0200,
++	AWDL_DATA_PATH_FLAG_AIRPLAY_SOLO = 0x0400,
++	AWDL_DATA_PATH_FLAG_UMI_SUPPORTED = 0x0800,
++	AWDL_DATA_PATH_FLAG_UNICAST_OPTIONS = 0x1000,
++	AWDL_DATA_PATH_FLAG_REALTIME = 0x2000,
++	AWDL_DATA_PATH_FLAG_RANGEABLE = 0x4000,
++	AWDL_DATA_PATH_FLAG_EXT_FLAGS = 0x8000,
++};
++
++enum awdl_data_path_state_ext_flags {
++	AWDL_DATA_PATH_EXT_LOGTRIGGER = 0x0001,
++	AWDL_DATA_PATH_EXT_RANGING_DISC = 0x0002,
++	AWDL_DATA_PATH_EXT_RLFC = 0x0004,
++	AWDL_DATA_PATH_EXT_SOCIAL_MAP_SUPPORTED = 0x0008,
++	AWDL_DATA_PATH_EXT_DYNAMIC_SDB = 0x0010,
++	AWDL_DATA_PATH_EXT_DFS_PROXY = 0x0040,
++	AWDL_DATA_PATH_EXT_HIGH_EFFICIENCY = 0x0100,
++	AWDL_DATA_PATH_EXT_FAST_DISCOVERY = 0x0400,
++	AWDL_DATA_PATH_EXT_WIFI_6E = 0x0800,
+ };
+ 
+ struct awdl_data_path_state_tlv {
+diff --git a/src/tx.c b/src/tx.c
+index 702d751..80f9ddd 100644
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -244,12 +244,21 @@ int awdl_init_ht_capabilities_tlv(uint8_t *buf, const struct awdl_state *state _
+ 
+ int awdl_init_data_path_state_tlv(uint8_t *buf, const struct awdl_state *state) {
+ 	struct awdl_data_path_state_tlv *tlv = (struct awdl_data_path_state_tlv *) buf;
++	uint16_t flags;
++	uint16_t ext_flags = 0;
++	uint8_t master_chan = awdl_chan_num(state->channel.master, AWDL_CHAN_ENC_OPCLASS);
+ 
+ 	tlv->type = AWDL_DATA_PATH_STATE_TLV;
+ 	tlv->length = htole16(sizeof(struct awdl_data_path_state_tlv) - sizeof(struct tl));
+ 
+-	/* TODO this is very ugly currently */
+-	tlv->flags = htole16(0x8f24);
++	/* Base flags: Extension flags present, UMI supported, AirPlay solo,
++	 * Social channels present, Country code present, AWDL address present */
++	flags = AWDL_DATA_PATH_FLAG_EXT_FLAGS |
++	        AWDL_DATA_PATH_FLAG_UMI_SUPPORTED |
++	        AWDL_DATA_PATH_FLAG_AIRPLAY_SOLO |
++	        AWDL_DATA_PATH_FLAG_SOCIAL_CHANNEL_MAP |
++	        AWDL_DATA_PATH_FLAG_COUNTRY_CODE |
++	        AWDL_DATA_PATH_FLAG_AWDL_ADDRESS;
+ 
+ 	tlv->awdl_addr = state->self_address;
+ 
+@@ -257,15 +266,30 @@ int awdl_init_data_path_state_tlv(uint8_t *buf, const struct awdl_state *state)
+ 	tlv->country_code[1] = '0';
+ 	tlv->country_code[2] = 0;
+ 
+-	if (awdl_chan_num(state->channel.master, AWDL_CHAN_ENC_OPCLASS) == 6)
++	if (master_chan == 6) {
++		/* When operating on Channel 6 (e.g. 2.4 GHz ad-hoc/exclusive mode),
++		 * do NOT advertise Dualband support (0x0020). Advertising dualband
++		 * causes Apple devices to treat Channel 149 as the primary AWDL data
++		 * channel (allocating 5 of 8 slots to 149 and only 3 to 6).
++		 * Clearing dualband and setting the social channel map to Channel 6
++		 * compels the peer to allocate all AWDL data slots to Channel 6. */
+ 		tlv->social_channels = htole16(AWDL_SOCIAL_CHANNEL_6_BIT);
+-	else if (awdl_chan_num(state->channel.master, AWDL_CHAN_ENC_OPCLASS) == 44) {
++		ext_flags |= AWDL_DATA_PATH_EXT_SOCIAL_MAP_SUPPORTED;
++	} else if (master_chan == 44) {
++		flags |= AWDL_DATA_PATH_FLAG_DUALBAND;
+ 		tlv->social_channels = htole16(AWDL_SOCIAL_CHANNEL_44_BIT);
+ 	} else { // 149
++		flags |= AWDL_DATA_PATH_FLAG_DUALBAND;
+ 		tlv->social_channels = htole16(AWDL_SOCIAL_CHANNEL_149_BIT);
+ 	}
+ 
+-	tlv->ext_flags = htole16(0x0000);
++	/* Signal Real-Time Mode (0x2000): informs Apple devices that low-latency /
++	 * high-throughput direct transfer is active, shifting the Apple driver
++	 * from power-saving/idle hopping into Data+Infra (75%) mode. */
++	flags |= AWDL_DATA_PATH_FLAG_REALTIME;
++
++	tlv->flags = htole16(flags);
++	tlv->ext_flags = htole16(ext_flags);
+ 
+ 	return sizeof(struct awdl_data_path_state_tlv);
+ }
