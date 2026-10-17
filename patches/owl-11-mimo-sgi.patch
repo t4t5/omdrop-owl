@@ -1,0 +1,20 @@
+diff --git a/src/tx.c b/src/tx.c
+index d72d7ff..702d751 100644
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -234,12 +234,12 @@ int awdl_init_ht_capabilities_tlv(uint8_t *buf, const struct awdl_state *state _
+ 	tlv->length = htole16(sizeof(struct awdl_ht_capabilities_tlv) - sizeof(struct tl));
+ 
+ 	/* TODO extract capabilities from nl80211 (nl80211_band_attr) */
+-	tlv->ht_capabilities = htole16(0x11ce);
++	tlv->ht_capabilities = htole16(0x11ee); /* 0x11ce with Bit 5 set: Short GI for 20 MHz */
+ 	tlv->ampdu_params = 0x1b;
+-	tlv->rx_mcs = 0xff; /* one stream, all MCS */
++	tlv->rx_mcs = 0xff; /* stream 1: all MCS (0..7) */
+ 
+ 	tlv->unknown = htole16(0);
+-	tlv->unknown2 = htole16(0);
++	tlv->unknown2 = htole16(0x00ff); /* stream 2: all MCS (8..15) */
+ 
+ 	return sizeof(struct awdl_ht_capabilities_tlv);
+ }
