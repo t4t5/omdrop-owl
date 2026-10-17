@@ -1,0 +1,134 @@
+diff --git a/daemon/owl.c b/daemon/owl.c
+index d65cd29..7c372f2 100644
+--- a/daemon/owl.c
++++ b/daemon/owl.c
+@@ -93,6 +93,7 @@ int main(int argc, char *argv[]) {
+ 	int filter_rssi = 1;
+ 	int fixed_radio = 0;
+ 	int metric_first = 0;
++	uint32_t metric = 0;
+ 	int no_monitor_mode = 0;
+ 	enum awdl_chanseq_strategy strategy = AWDL_CHANSEQ_VERBATIM;
+ 	int widen_max = 4;
+@@ -106,7 +107,7 @@ int main(int argc, char *argv[]) {
+ 
+ 	struct daemon_state state;
+ 
+-	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:FE")) != -1) {
++	while ((c = getopt(argc, argv, "Dc:dvi:h:a:t:fNS:W:R:m:FEM:")) != -1) {
+ 		switch (c) {
+ 			case 'm': {
+ 				/* Our AWDL address, instead of the monitor interface's MAC. On
+@@ -188,6 +189,9 @@ int main(int argc, char *argv[]) {
+ 				 * first, then counter (see awdl_election_compare_master). */
+ 				metric_first = 1;
+ 				break;
++			case 'M':
++				metric = (uint32_t) strtoul(optarg, NULL, 10);
++				break;
+ 			case 'F':
+ 				/* The radio stays on -c's channel and that channel wasn't chosen
+ 				 * to suit the peers: send multicast in any slot, and unicast in
+@@ -280,9 +284,13 @@ int main(int argc, char *argv[]) {
+ 	state.awdl_state.channel.strategy = strategy;
+ 	state.awdl_state.channel.widen_max = widen_max;
+ 	state.awdl_state.channel.fixed_radio = fixed_radio;
++	if (metric) {
++		state.awdl_state.election.self_metric = metric;
++		state.awdl_state.election.master_metric = metric;
++	}
+ 	state.awdl_state.election.metric_first = metric_first;
+ 	if (metric_first)
+-		log_info("election: by metric, then counter");
++		log_info("election: by metric (%u), then counter", state.awdl_state.election.self_metric);
+ 	if (fixed_radio)
+ 		log_info("fixed radio: multicast in any slot, unicast whenever the peer is on our channel");
+ 	log_info("channel sequence strategy: %s",
+diff --git a/src/rx.c b/src/rx.c
+index e036be1..5ef5ec6 100644
+--- a/src/rx.c
++++ b/src/rx.c
+@@ -185,8 +185,11 @@ int awdl_handle_data_path_state_tlv(struct awdl_peer *src, const struct buf *val
+ 		offset += 3;
+ 	}
+ 	if (flags & AWDL_DATA_PATH_FLAG_SOCIAL_CHANNEL_MAP) {
+-		READ_LE16(val, offset, NULL /* supported social channels */);
++		uint16_t social = 0;
++		READ_LE16(val, offset, &social);
+ 		offset += 2;
++		log_info("rx data path: peer=%s flags=0x%04x social=0x%04x",
++		         ether_ntoa(&src->addr), flags, social);
+ 	}
+ 	if (flags & AWDL_DATA_PATH_FLAG_INFRA_INFO) {
+ 		READ_ETHER_ADDR(val, offset, NULL /* BSSID */);
+diff --git a/src/tx.c b/src/tx.c
+index 80f9ddd..024f538 100644
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -29,6 +29,7 @@
+ #include "ieee80211.h"
+ 
+ #include "crc32.h"
++#include "log.h"
+ 
+ #define AWDL_DNS_SHORT_LOCAL  0xc00c  /* .local */
+ 
+@@ -121,15 +122,14 @@ int awdl_init_sync_params_tlv(uint8_t *buf, const struct awdl_state *state) {
+ 	tlv->reserved = 0;
+ 
+ 	/* TODO: dynamic info needs to be adjusted during runtime */
+-	tlv->next_aw_channel = awdl_chan_num(state->channel.current,
+-	                                     state->channel.enc); /* TODO need to calculate this from current seq */
++	tlv->next_aw_channel = awdl_chan_num(state->channel.master, AWDL_CHAN_ENC_OPCLASS);
+ 	tlv->next_aw_seq = htole16(awdl_sync_current_aw(now, &state->sync));
+ 	tlv->ap_alignment = tlv->next_aw_seq; /* awdl_fill_sync_params(..) */
+ 	tlv->tx_down_counter = htole16(awdl_sync_next_aw_tu(now, &state->sync));
+ 	tlv->af_period = htole16(state->psf_interval);
+ 	tlv->presence_mode = state->sync.presence_mode; /* always available, usually 4 */
+ 	tlv->master_addr = state->election.master_addr;
+-	tlv->master_channel = awdl_chan_num(state->channel.master, state->channel.enc);
++	tlv->master_channel = awdl_chan_num(state->channel.master, AWDL_CHAN_ENC_OPCLASS);
+ 	/* lower bound is 0 */
+ 	if (le16toh(tlv->aw_com_length) < (le16toh(tlv->aw_period) * tlv->presence_mode - le16toh(tlv->tx_down_counter)))
+ 		tlv->remaining_aw_length = htole16(0);
+@@ -201,8 +201,14 @@ int awdl_init_election_params_v2_tlv(uint8_t *buf, const struct awdl_state *stat
+ 	tlv->unknown = htole32(0);
+ 	tlv->reserved = htole32(0);
+ 
+-	tlv->master_counter = htole32(state->election.master_counter);
+-	tlv->self_counter = htole32(state->election.self_counter);
++	uint32_t counter = (uint32_t) (clock_time_us() / 3140000);
++	if (awdl_election_is_sync_master(&state->election, &state->self_address)) {
++		tlv->master_counter = htole32(counter);
++		tlv->self_counter = htole32(counter);
++	} else {
++		tlv->master_counter = htole32(state->election.master_counter);
++		tlv->self_counter = htole32(state->election.self_counter);
++	}
+ 
+ 	return sizeof(struct awdl_election_params_v2_tlv);
+ }
+@@ -252,10 +258,12 @@ int awdl_init_data_path_state_tlv(uint8_t *buf, const struct awdl_state *state)
+ 	tlv->length = htole16(sizeof(struct awdl_data_path_state_tlv) - sizeof(struct tl));
+ 
+ 	/* Base flags: Extension flags present, UMI supported, AirPlay solo,
+-	 * Social channels present, Country code present, AWDL address present */
++	 * Social channels present, Country code present, AWDL address present,
++	 * and Follow Channel Sequence */
+ 	flags = AWDL_DATA_PATH_FLAG_EXT_FLAGS |
+ 	        AWDL_DATA_PATH_FLAG_UMI_SUPPORTED |
+ 	        AWDL_DATA_PATH_FLAG_AIRPLAY_SOLO |
++	        AWDL_DATA_PATH_FLAG_FOLLOW_CHAN_SEQ |
+ 	        AWDL_DATA_PATH_FLAG_SOCIAL_CHANNEL_MAP |
+ 	        AWDL_DATA_PATH_FLAG_COUNTRY_CODE |
+ 	        AWDL_DATA_PATH_FLAG_AWDL_ADDRESS;
+@@ -291,6 +299,9 @@ int awdl_init_data_path_state_tlv(uint8_t *buf, const struct awdl_state *state)
+ 	tlv->flags = htole16(flags);
+ 	tlv->ext_flags = htole16(ext_flags);
+ 
++	log_info("tx data path: flags=0x%04x ext=0x%04x social=0x%04x master_chan=%d",
++	         flags, ext_flags, le16toh(tlv->social_channels), master_chan);
++
+ 	return sizeof(struct awdl_data_path_state_tlv);
+ }
+ 
