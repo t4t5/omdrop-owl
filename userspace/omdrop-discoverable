@@ -575,6 +575,17 @@ cmd_start() {
     strategy=pin
   fi
 
+  # Optional knobs to override OWL defaults ($CONF/tx-rate, $CONF/election-metric):
+  # - tx-rate: legacy rate (e.g. 54) or mcs (e.g. mcs7) for fast ACK turnaround
+  # - election-metric: integer (e.g. 550) to win cluster sync master election
+  local rate metric
+  rate=$(knob tx-rate)
+  [ -n "$rate" ] && owl_extra+=(-R "$rate")
+
+  metric=$(knob election-metric)
+  [ -n "$metric" ] && owl_extra+=(-M "$metric")
+
+
   # mt76_pm: runtime PM off for the window, restored by stop.
   mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
   mt76=$(mt76_dir "$sta")
