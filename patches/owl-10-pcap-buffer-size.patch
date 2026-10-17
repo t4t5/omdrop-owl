@@ -1,0 +1,12 @@
+diff --git a/daemon/io.c b/daemon/io.c
+index 281a067..4a8b752 100644
+--- a/daemon/io.c
++++ b/daemon/io.c
+@@ -53,6 +53,7 @@ static pcap_t *open_pcap(const char *dev, const struct ether_addr *bssid_filter)
+ 	}
+ 
+ 	pcap_set_snaplen(handle, 65535);
++	pcap_set_buffer_size(handle, 8 * 1024 * 1024);
+ 	pcap_set_promisc(handle, 1);
+ #ifdef __APPLE__
+ 	/* On Linux, we activate monitor mode via nl80211 */
