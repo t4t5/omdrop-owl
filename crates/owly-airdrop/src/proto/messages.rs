@@ -171,7 +171,7 @@ pub struct AskRequest {
     /// `None` for the legacy shape.
     pub transfer_id: Option<String>,
     /// The key of the iOS 18 shape's `TransferType` dict, such as `files`
-    /// or `links` (docs/open-questions.md, item 12). Encoding derives it
+    /// or `links` (§6.4). Encoding derives it
     /// from the offer when it's `None`.
     pub transfer_type: Option<String>,
     pub sender_computer_name: String,
@@ -251,8 +251,7 @@ impl AskRequest {
                 Value::Dict(Dict::from([("id".into(), id.clone().into())])),
             );
         }
-        // `links` for a URL share hasn't been captured from an Apple
-        // sender (docs/open-questions.md, item 12).
+        // `links` for a URL share, as iOS sends it (§6.4).
         let kind = match (&self.transfer_type, &self.offer) {
             (Some(kind), _) => kind.as_str(),
             (None, Offer::Files(_)) => "files",
