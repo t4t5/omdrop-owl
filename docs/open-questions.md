@@ -4,9 +4,9 @@ What [the spec](SPEC.md) states that hasn't been confirmed by a capture of Apple
 
 1. How phone numbers and email addresses are normalized before hashing (BLE-4).
 2. What byte 0 (`0x40`) and the 3-byte tag of a version 3 BLE advertisement mean, and whether version 1 still wakes current iPhones (BLE-2, BLE-5).
-3. The HTTP status of a `401` `/Discover` response, and whether `StatusCode` is always present (DISC-2).
+3. The HTTP status of a `401` `/Discover` response (DISC-2).
 4. Which flag bit is pipelined upload. Analysis of `sharingd` names a SupportsUPP bit "0xb", and gives `0x3FB` as an example of it, which has neither `0x004` nor `0x800` set (MDNS-4).
-5. What a receiver sends after its own 15 s `/Ask` timeout. iOS sends no response to a decline (ASK-2).
+5. Whether macOS receivers time out an unanswered `/Ask`, and what they send then. iOS has no timeout of its own, and answers a decline with `401` (ASK-2).
 6. `TransferVersion`'s type and values, and what they unlock. It's said to gate DVZip and pipelined upload (§6.3).
 7. The validation record's key names, and whether it binds to the account the sender's TLS client certificate names (ID-2, TLS-3).
 8. What `/SharedIdentity` and `/Error` do, and whether a receiver must serve them for current senders (HTTP-4).
