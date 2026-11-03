@@ -419,6 +419,26 @@ veth_test! {
     }
 }
 
+// spec: HTTP-1
+veth_test! {
+    async fn the_wait_for_the_upload_starts_at_the_answer(veth: Veth) {
+        let mut r = receiver_with(&veth, config(), |o| o.idle_timeout = Duration::from_secs(3)).await;
+        let mut c = connect(&veth).await;
+        c.send(&ask_for("x", ID)).await;
+        // The user takes 2 s to accept, and the sender 2 s more to upload:
+        // longer than the idle timeout since the /Ask, but not since the
+        // answer.
+        let request = r.next_request().await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        request.accept();
+        assert_eq!(c.response().await.unwrap().status, 200);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let body = archive(&[(entry("./x", 0o100644, 1), b"x")]);
+        assert_eq!(c.request(&upload(ID, "application/x-cpio", &body)).await.unwrap().status, 200);
+        assert_eq!(r.files(), [("x".to_string(), b"x".to_vec())]);
+    }
+}
+
 // spec: UP-11
 veth_test! {
     async fn upload_completes_at_the_archive_trailer(veth: Veth) {

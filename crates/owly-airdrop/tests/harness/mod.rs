@@ -177,9 +177,19 @@ pub fn config() -> Config {
 
 /// A receiver on `b`, serving in the background.
 pub async fn receiver(veth: &Veth, config: Config) -> Running {
+    receiver_with(veth, config, |_| {}).await
+}
+
+/// A receiver on `b` with its options changed by `adjust`.
+pub async fn receiver_with(
+    veth: &Veth,
+    config: Config,
+    adjust: impl FnOnce(&mut Options),
+) -> Running {
     let dest = tempfile::tempdir().unwrap();
     let identity = Identity::generate().unwrap();
-    let options = Options::new(config, dest.path().to_path_buf());
+    let mut options = Options::new(config, dest.path().to_path_buf());
+    adjust(&mut options);
     let (receiver, events) = Receiver::bind(veth.b.socket(PORT), &identity, options)
         .await
         .unwrap();

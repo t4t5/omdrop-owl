@@ -370,9 +370,9 @@ Other bits are reserved.
 
 **TLS-1** All AirDrop HTTP runs over TLS 1.2 or 1.3. Endpoints MUST NOT offer TLS 1.0. No ALPN protocol is negotiated, and sessions aren't resumed.
 
-**TLS-2** TLS provides encryption only, not peer authentication. Receivers accept self-signed certificates, don't check host names, and accept any TLS connection in every visibility mode, Contacts Only included. Identity is carried in the record (§7), not the TLS handshake. An implementation MUST present a certificate and MUST NOT reject a peer for being self-signed.
+**TLS-2** TLS provides encryption only, not peer authentication. Receivers accept self-signed certificates, don't check host names, and accept any TLS connection in every visibility mode, Contacts Only included. Identity is carried in the record (§7); for the sender's client certificate, see TLS-3. An implementation MUST present a certificate and MUST NOT reject a peer for being self-signed.
 
-**TLS-3** Senders don't present a TLS client certificate. A sender MUST NOT depend on one. A receiver MUST accept connections without one, and SHOULD accept them with one.
+**TLS-3** Asked for a client certificate, a sender presents one on the connection that carries `/Ask` and `/Upload`, and none on the `/Discover` connection. It's a two-certificate chain: a leaf with subject `CN=com.apple.idms.appleid.prd.<account ID>` and extended key usages client and server authentication, issued by Apple Application Integration Certification Authority, and that intermediate, issued by Apple Root CA. Whether a receiver should check it isn't defined in this version. A sender MUST NOT depend on presenting one. A receiver MUST accept connections without one, and SHOULD accept them with one.
 
 **HTTP-1** (connections) HTTP/1.1. `/Ask` and `/Upload` MUST share one TLS connection: a receiver rejects an `/Upload` on any other (UP-6). A sender sends `/Discover` on its own connection, closes it, and opens a new one for `/Ask` and `/Upload`. A receiver MUST also accept `/Discover` followed by `/Ask` on the same connection.
 
@@ -501,11 +501,13 @@ An `/Ask` for one photo, in the current form (data shown as `<hex>`):
 | `ConvertMediaFormats` | bool | R | `false`: don't transcode. |
 | `SenderRecordData` | data | C | As in `/Discover`. |
 | `SenderIdentityAuthTag` | data | O | 3 bytes. Not needed in Everyone mode. Its derivation isn't defined in this version. |
-| `Files` | array\<dict\> | C | Required for a file share, see below. |
+| `Files` | array\<dict\> | C | Required for a file share, see below. Empty with a link share. |
 | `Items` | array\<string\> | C | The URLs, for a link share. Empty with a file share. The legacy form omits it. |
 | `FileIcon` | data | O | Preview thumbnail, JPEG 2000, ≤ 540 px on the long side. |
 
 A request MUST carry a non-empty `Files` or a non-empty `Items`, not both.
+
+A link share in the current form carries `TransferType` `{"links": {}}`, the URLs in `Items` and an empty `Files`, with `BundleID` naming the app it was shared from, such as `com.apple.mobilesafari`. It can carry a `FileIcon`.
 
 **`Files[]` entry**
 

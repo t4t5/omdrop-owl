@@ -8,12 +8,12 @@ What [the spec](SPEC.md) states that hasn't been confirmed by a capture of Apple
 4. Which flag bit is pipelined upload. Analysis of `sharingd` names a SupportsUPP bit "0xb", and gives `0x3FB` as an example of it, which has neither `0x004` nor `0x800` set (MDNS-4).
 5. What a receiver sends after its own 15 s `/Ask` timeout. iOS sends no response to a decline (ASK-2).
 6. `TransferVersion`'s type and values, and what they unlock. It's said to gate DVZip and pipelined upload (§6.3).
-7. The validation record's key names, and whether it also binds to the TLS certificate (ID-2).
+7. The validation record's key names, and whether it binds to the account the sender's TLS client certificate names (ID-2, TLS-3).
 8. What `/SharedIdentity` and `/Error` do, and whether a receiver must serve them for current senders (HTTP-4).
 9. The other keys, about 24, that Apple receivers publish in TXT, and whether any matter to Apple senders (MDNS-1).
 10. Whether an identity extracted from the user's own Mac gets accepted without a prompt on their iPhone (ASK-6).
 11. The layouts of the Service Response (2), Sync Tree (20) and Bloom Filter (22) TLVs (AWDL-6). The Service Response TLV would let a receiver skip the bursts of MDNS-7, and may be why an iPhone's mDNS doesn't reach a Linux node (DISC-5).
-12. What an Apple sender sends in `/Ask` for a link share. `TransferType` `{"links": {}}` with the URLs in `Items` and an empty `Files` is accepted by iOS 26.7.1, but hasn't been captured from an Apple sender (§6.4).
+12. *Settled* (§6.4).
 13. What `SenderIdentityAuthTag` is, and whether Contacts Only receivers need it (§6.4).
 14. What `IDSSessionID` and `ReceiverPseudonym` in the `/Discover` response are for (§6.3).
 15. Whether macOS receivers require the current `/Ask` form too (ASK-7).

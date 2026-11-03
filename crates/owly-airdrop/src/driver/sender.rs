@@ -23,7 +23,7 @@ use super::tls::{self, Identity};
 use crate::proto::archive::compress::{Compressor, Encoder};
 use crate::proto::archive::cpio::{self, Entry};
 use crate::proto::archive::extract::RelPath;
-use crate::proto::mdns::SUPPORTS_DVZIP;
+use crate::proto::mdns::{SUPPORTS_DVZIP, SUPPORTS_MIXED_TYPES, SUPPORTS_PIPELINING};
 use crate::proto::messages::{AskFile, Offer};
 use crate::proto::sender::{self, Action, Config, Outcome, Receiver, ResponseReader, Transfer};
 
@@ -66,8 +66,8 @@ impl Sender {
         Self::with_client_identity(config, None)
     }
 
-    /// A sender that presents a client certificate, which Apple senders
-    /// don't (TLS-3). For tests.
+    /// A sender that presents a client certificate, as Apple senders do
+    /// (TLS-3). For tests.
     #[doc(hidden)]
     pub fn with_client_identity(config: Config, identity: Option<&Identity>) -> io::Result<Self> {
         Ok(Sender {
@@ -105,8 +105,8 @@ impl Sender {
     }
 
     /// Asks the receiver at `addr` to take `payload`, and uploads it if it
-    /// does. `receiver_flags` is its TXT `flags`, which decides between
-    /// DVZip and gzip.
+    /// does. `receiver_flags` is its TXT `flags`, or `0` if they aren't
+    /// known, and decides between DVZip and gzip (UP-1b).
     pub async fn send(
         &self,
         addr: SocketAddrV6,
@@ -114,11 +114,7 @@ impl Sender {
         receiver_flags: u32,
         events: Option<mpsc::UnboundedSender<Event>>,
     ) -> io::Result<Outcome> {
-        let compressor = if receiver_flags & SUPPORTS_DVZIP != 0 {
-            Compressor::DvZip
-        } else {
-            Compressor::Gzip
-        };
+        let compressor = compressor(receiver_flags);
         let (offer, archive) = match payload {
             Payload::Urls(urls) => (Offer::Urls(urls.clone()), None),
             Payload::Files(paths) => {
@@ -241,6 +237,19 @@ async fn write<S: AsyncWriteExt + Unpin>(stream: &mut S, bytes: &[u8]) -> io::Re
     timeout(WRITE_TIMEOUT, written)
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "the receiver stopped reading"))?
+}
+
+/// DVZip unless the receiver's TXT `flags` leave it out. Flags with neither
+/// SupportsPipelining nor SupportsMixedTypes aren't a valid receiver's
+/// (MDNS-5), such as the `0` of an instance whose TXT hasn't arrived, so
+/// they say nothing and get DVZip too (UP-1b).
+fn compressor(receiver_flags: u32) -> Compressor {
+    let known = receiver_flags & (SUPPORTS_PIPELINING | SUPPORTS_MIXED_TYPES) != 0;
+    if known && receiver_flags & SUPPORTS_DVZIP == 0 {
+        Compressor::Gzip
+    } else {
+        Compressor::DvZip
+    }
 }
 
 /// A fresh transfer ID: an uppercase UUID v4 (§6.4).
@@ -453,5 +462,16 @@ mod tests {
         let e = write(&mut ours, &[0; 4096]).await.unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
         assert_eq!(started.elapsed(), WRITE_TIMEOUT);
+    }
+
+    // spec: UP-1b, MDNS-5
+    #[test]
+    fn gzip_only_for_a_receiver_whose_flags_leave_out_dvzip() {
+        assert_eq!(compressor(0x089), Compressor::Gzip);
+        assert_eq!(compressor(0x08b), Compressor::DvZip);
+        assert_eq!(compressor(0x3fb), Compressor::DvZip);
+        // No TXT yet, or flags no valid receiver sends.
+        assert_eq!(compressor(0), Compressor::DvZip);
+        assert_eq!(compressor(0x001), Compressor::DvZip);
     }
 }
