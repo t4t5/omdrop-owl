@@ -520,7 +520,11 @@ impl Connection {
             self.fail(400);
             return;
         };
-        // Photos wraps multi-photo files in individual folders; extraction keeps the displayed name.
+        // ASK-5: every path is checked before anyone is asked about it, and
+        // what's written must be what the prompt names: `FileBomPath` is
+        // `./<FileName>`, or `./<folder>/<FileName>` for a regular file, as
+        // Photos wraps each file of a multi-photo share. Extraction drops the
+        // folder.
         if let Offer::Files(files) = &request.offer
             && files.iter().any(|f| {
                 let (Ok(name), Ok(path)) =
@@ -724,6 +728,7 @@ mod tests {
         )]))
     }
 
+    // spec: ASK-5
     #[test]
     fn wrapped_photos_reach_the_confirmation_prompt() {
         let mut connection = Connection::new(Arc::new(Config::new("Receiver")));
@@ -745,6 +750,7 @@ mod tests {
         assert!(matches!(request.offer, Offer::Files(files) if files.len() == 2));
     }
 
+    // spec: ASK-5, SEC-1
     #[test]
     fn wrapped_paths_still_require_safe_paths_and_the_displayed_file_name() {
         for (path, directory) in [

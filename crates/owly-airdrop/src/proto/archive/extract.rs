@@ -467,6 +467,7 @@ mod tests {
         ));
     }
 
+    // spec: UP-2a, UP-7, UP-7a
     #[test]
     fn wrapped_photos_are_flattened_without_allowing_other_entries_or_collisions() {
         let mut r = rules(&[("wrap-one/one.jpg", false), ("wrap-two/two.jpg", false)]);
