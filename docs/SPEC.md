@@ -514,7 +514,7 @@ A request MUST carry a non-empty `Files` or a non-empty `Items`, not both.
 | `FileName` | string | R | Base name. |
 | `FileType` | string | R | Uniform Type Identifier, e.g. `public.heic`, `public.jpeg`, `public.data` (fallback). Not a MIME type. |
 | `FileSize` | int | R (current) | Uncompressed size in bytes. |
-| `FileBomPath` | string | R | Path inside the `/Upload` archive. MUST be `./<FileName>`: the `./` prefix is required. |
+| `FileBomPath` | string | R | Path inside the `/Upload` archive: `./<FileName>`, or `./<folder>/<FileName>` for a regular file in a wrapper directory. The `./` prefix is required. |
 | `FileIsDirectory` | bool | R | |
 | `ShouldConvertMediaFormats` | bool | R (current) | `false`. |
 | `ConvertMediaFormats` | int | legacy | `0`. The legacy form's name for the field above. |
@@ -536,7 +536,7 @@ A request MUST carry a non-empty `Files` or a non-empty `Items`, not both.
 
 **ASK-4** (sender) For a link share, the sender MUST NOT send `/Upload`. The share is complete when `/Ask` returns `200`.
 
-**ASK-5** (receiver) A receiver MUST treat every `FileName` and `FileBomPath` as untrusted (SEC-1). It MUST refuse an `/Ask` whose `FileBomPath` isn't `./<FileName>`, so that the file written is the one the prompt names.
+**ASK-5** (receiver) A receiver MUST treat every `FileName` and `FileBomPath` as untrusted (SEC-1). It MUST refuse an `/Ask` whose `FileBomPath` isn't `./<FileName>` or, for a regular file, `./<folder>/<FileName>`. The wrapper MUST be exactly one safe path component. The file written MUST have the name shown by the prompt.
 
 **ASK-6** Receivers accept without prompting when the sender's record verifies as the receiver's own Apple ID (§7). No field of the request can claim this.
 
@@ -569,10 +569,12 @@ Content-Length: 76166
 | Entry | Mode | Notes |
 |---|---|---|
 | `.` | `040755` (directory) | Root entry. Earlier senders leave it out. |
-| `./<FileName>` | `0100644` (regular file) | One per `Files[]` entry. The name equals its `FileBomPath`. |
+| `<FileBomPath>` | `0100644` (regular file) | One per `Files[]` entry. |
 | `TRAILER!!!` | `0` | Terminator. |
 
 A sender MUST send the `.` root entry. A receiver MUST accept archives with and without it.
+
+For the wrapped regular-file form in ASK-5, the archive MAY include a `./<folder>` directory entry before the file. The receiver MUST save the file as `<FileName>` without retaining the wrapper directory.
 
 **UP-3** (receiver) A receiver MUST answer `Expect: 100-continue` with `100 Continue`. Senders send it when the receiver doesn't advertise SupportsPipelining.
 
@@ -582,7 +584,7 @@ A sender MUST send the `.` root entry. A receiver MUST accept archives with and 
 
 **UP-6** (receiver) A receiver MUST reject an upload that doesn't follow an accepted `/Ask` on the same connection.
 
-**UP-7** (receiver) A receiver MUST reject archive entries that aren't listed in the accepted `/Ask`.
+**UP-7** (receiver) A receiver MUST reject archive entries that aren't listed in the accepted `/Ask`, except for the wrapper directory entries in UP-2a and the metadata in UP-7a.
 
 **UP-7a** (receiver) A sender can add AppleDouble members, named `._<name>`, that hold a file's metadata and aren't listed in the `/Ask`. A receiver SHOULD accept a `._<name>` member next to a listed item, or inside a listed directory, rather than reject the archive under UP-7, and MAY discard it.
 
