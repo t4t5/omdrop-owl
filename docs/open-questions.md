@@ -14,8 +14,8 @@ What [the spec](SPEC.md) states that hasn't been confirmed by a capture of Apple
 10. Whether an identity extracted from the user's own Mac gets accepted without a prompt on their iPhone (ASK-6).
 11. The layouts of the Service Response (2), Sync Tree (20) and Bloom Filter (22) TLVs (AWDL-6). The Service Response TLV would let a receiver skip the bursts of MDNS-7, and may be why an iPhone's mDNS doesn't reach a Linux node (DISC-5).
 12. *Settled* (§6.4).
-13. What `SenderIdentityAuthTag` is, and whether Contacts Only receivers need it (§6.4).
-14. What `IDSSessionID` and `ReceiverPseudonym` in the `/Discover` response are for (§6.3).
+13. What `SenderIdentityAuthTag` is, and whether Contacts Only receivers need it. It changes with each transfer, and isn't the BLE advertisement's tag (§6.4).
+14. What `IDSSessionID` and `ReceiverPseudonym` in the `/Discover` response, and `SenderPseudonym` and `SenderPushToken` in `/Upload`, are for (§6.3, §6.5).
 15. Whether macOS receivers require the current `/Ask` form too (ASK-7).
 16. Whether Apple peers need the ICMPv6 echo of OWLY-2 to learn a node's neighbor entry, or something else Owly does already teaches them.
 

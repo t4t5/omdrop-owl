@@ -16,10 +16,10 @@ pub const INTERVAL_MS: u32 = 100;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Advert {
     pub tag: [u8; 3],
-    pub apple_id: [u8; 2],
-    pub phone: [u8; 2],
-    pub email: [u8; 2],
-    pub email2: [u8; 2],
+    /// The sender's contact hashes: the first 2 bytes of SHA-256 of its
+    /// Apple ID, a phone number or an email address. A slot doesn't say
+    /// which, since senders rotate them between advertisements (BLE-2).
+    pub hashes: [[u8; 2]; 4],
 }
 
 impl Advert {
@@ -39,7 +39,7 @@ impl Advert {
         out.extend_from_slice(&self.tag);
         out.extend_from_slice(&[0; 4]);
         out.push(0x03);
-        for hash in [self.apple_id, self.phone, self.email, self.email2] {
+        for hash in self.hashes {
             out.extend_from_slice(&hash);
         }
         out.push(0x00);
@@ -67,10 +67,7 @@ mod tests {
     fn hashes_in_order() {
         let advert = Advert {
             tag: [0; 3],
-            apple_id: [1, 2],
-            phone: [3, 4],
-            email: [5, 6],
-            email2: [7, 8],
+            hashes: [[1, 2], [3, 4], [5, 6], [7, 8]],
         };
         assert_eq!(
             &advert.manufacturer_data()[11..],
