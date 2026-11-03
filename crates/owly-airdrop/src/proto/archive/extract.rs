@@ -192,6 +192,7 @@ pub struct Rules {
     allowed: Vec<Allowed>,
     limits: Limits,
     seen: HashSet<RelPath>,
+    destinations: HashSet<RelPath>,
     entries: u32,
     total: u64,
 }
@@ -202,6 +203,7 @@ impl Rules {
             allowed,
             limits,
             seen: HashSet::new(),
+            destinations: HashSet::new(),
             entries: 0,
             total: 0,
         }
@@ -229,8 +231,21 @@ impl Rules {
             .allowed
             .iter()
             .any(|a| path == a.path && a.is_directory == entry.is_dir());
-        let item = if !listed && entry.is_file() && self.is_sidecar(&path) {
+        let wrapped_file = self
+            .allowed
+            .iter()
+            .any(|a| !a.is_directory && a.path.components().len() == 2 && path == a.path);
+        let wrapper = !listed
+            && entry.is_dir()
+            && self.allowed.iter().any(|a| {
+                !a.is_directory
+                    && a.path.components().len() == 2
+                    && a.path.parent().as_ref() == Some(&path)
+            });
+        let item = if wrapper || !listed && entry.is_file() && self.is_sidecar(&path) {
             Item::Skip
+        } else if wrapped_file && entry.is_file() {
+            Item::File(RelPath::file_name(path.last())?)
         } else if listed || self.is_inside_directory(&path) {
             if entry.is_dir() {
                 Item::Dir(path.clone())
@@ -241,6 +256,11 @@ impl Rules {
             return Err(Error::NotAsked(entry.name.clone()));
         };
         if !self.seen.insert(path) {
+            return Err(Error::Duplicate(entry.name.clone()));
+        }
+        if let Item::File(destination) | Item::Dir(destination) = &item
+            && !self.destinations.insert(destination.clone())
+        {
             return Err(Error::Duplicate(entry.name.clone()));
         }
         self.total = self.total.saturating_add(entry.size);
@@ -444,6 +464,60 @@ mod tests {
         assert!(matches!(
             r.check(&entry("a", MODE_FILE | 0o644, 1)),
             Err(Error::Duplicate(_))
+        ));
+    }
+
+    #[test]
+    fn wrapped_photos_are_flattened_without_allowing_other_entries_or_collisions() {
+        let mut r = rules(&[("wrap-one/one.jpg", false), ("wrap-two/two.jpg", false)]);
+        assert_eq!(
+            r.check(&entry("./wrap-one", MODE_DIR | 0o755, 0)),
+            Ok(Item::Skip)
+        );
+        assert_eq!(
+            r.check(&entry("./wrap-one/one.jpg", MODE_FILE | 0o644, 3)),
+            Ok(Item::File(RelPath::file_name("one.jpg").unwrap()))
+        );
+        assert_eq!(
+            r.check(&entry("./wrap-one/._one.jpg", MODE_FILE | 0o644, 2)),
+            Ok(Item::Skip)
+        );
+        assert_eq!(
+            r.check(&entry("./wrap-two", MODE_DIR | 0o755, 0)),
+            Ok(Item::Skip)
+        );
+        assert_eq!(
+            r.check(&entry("./wrap-two/two.jpg", MODE_FILE | 0o644, 3)),
+            Ok(Item::File(RelPath::file_name("two.jpg").unwrap()))
+        );
+        assert!(matches!(
+            r.check(&entry("./other", MODE_DIR | 0o755, 0)),
+            Err(Error::NotAsked(_))
+        ));
+        assert!(matches!(
+            r.check(&entry("./wrap-one/other.jpg", MODE_FILE | 0o644, 1)),
+            Err(Error::NotAsked(_))
+        ));
+        assert!(matches!(
+            r.check(&entry("./wrap-one/one.jpg", MODE_FILE | 0o644, 1)),
+            Err(Error::Duplicate(_))
+        ));
+
+        let mut r = rules(&[("a/photo.jpg", false), ("b/photo.jpg", false)]);
+        r.check(&entry("./a/photo.jpg", MODE_FILE | 0o644, 1))
+            .unwrap();
+        assert!(matches!(
+            r.check(&entry("./b/photo.jpg", MODE_FILE | 0o644, 1)),
+            Err(Error::Duplicate(_))
+        ));
+        let mut r = rules(&[("a/photo.jpg", false)]);
+        assert_eq!(
+            r.check(&entry("./a/photo.jpg", MODE_FILE | 0o644, 1001)),
+            Err(Error::TooLarge)
+        );
+        assert!(matches!(
+            r.check(&entry("./a/photo.jpg", 0o120777, 1)),
+            Err(Error::Unsupported(_))
         ));
     }
 

@@ -520,9 +520,7 @@ impl Connection {
             self.fail(400);
             return;
         };
-        // ASK-5: every path is checked before anyone is asked about it, and
-        // what's written must be what the prompt names: `FileBomPath` is
-        // `./<FileName>`.
+        // Photos wraps multi-photo files in individual folders; extraction keeps the displayed name.
         if let Offer::Files(files) = &request.offer
             && files.iter().any(|f| {
                 let (Ok(name), Ok(path)) =
@@ -531,6 +529,9 @@ impl Connection {
                     return true;
                 };
                 name != path
+                    && !(!f.is_directory
+                        && path.components().len() == 2
+                        && path.last() == name.last())
             })
         {
             self.fail(400);
@@ -695,6 +696,74 @@ impl fmt::Display for UploadError {
         match self {
             UploadError::Http(e) => e.fmt(f),
             UploadError::Archive(e) => e.fmt(f),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn offered(paths: &[(&str, &str, bool)]) -> plist::Value {
+        use plist::Value;
+        Value::Dict(BTreeMap::from([(
+            "Files".into(),
+            Value::Array(
+                paths
+                    .iter()
+                    .map(|(name, path, directory)| {
+                        Value::Dict(BTreeMap::from([
+                            ("FileName".into(), Value::String((*name).into())),
+                            ("FileBomPath".into(), Value::String((*path).into())),
+                            ("FileIsDirectory".into(), Value::Bool(*directory)),
+                        ]))
+                    })
+                    .collect(),
+            ),
+        )]))
+    }
+
+    #[test]
+    fn wrapped_photos_reach_the_confirmation_prompt() {
+        let mut connection = Connection::new(Arc::new(Config::new("Receiver")));
+        connection.ask(&offered(&[
+            (
+                "one.jpg",
+                "./PHMediaFormatConversionRequest-one/one.jpg",
+                false,
+            ),
+            (
+                "two.jpg",
+                "./PHMediaFormatConversionRequest-two/two.jpg",
+                false,
+            ),
+        ]));
+        let Some(Event::Ask(request)) = connection.poll() else {
+            panic!("missing prompt")
+        };
+        assert!(matches!(request.offer, Offer::Files(files) if files.len() == 2));
+    }
+
+    #[test]
+    fn wrapped_paths_still_require_safe_paths_and_the_displayed_file_name() {
+        for (path, directory) in [
+            ("../photo.jpg", false),
+            ("/folder/photo.jpg", false),
+            ("./folder/../photo.jpg", false),
+            ("./folder/deeper/photo.jpg", false),
+            ("./folder/other.jpg", false),
+            ("./folder/photo.jpg", true),
+        ] {
+            let mut connection = Connection::new(Arc::new(Config::new("Receiver")));
+            connection.ask(&offered(&[("photo.jpg", path, directory)]));
+            assert!(
+                !connection
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, Event::Ask(_))),
+                "accepted {path}"
+            );
         }
     }
 }
