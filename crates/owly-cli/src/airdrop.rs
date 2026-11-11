@@ -173,8 +173,11 @@ pub async fn browse(bus: Option<&str>, args: BrowseArgs) -> Result<ExitCode, Str
             }),
             by_peers
         );
-        if let Err(e) = by_mdns {
-            eprintln!("not browsing mDNS: {e}");
+        // Without a lease, mDNS was the only way to find anyone.
+        match by_mdns {
+            Err(e) if lease.is_none() => return Err(e),
+            Err(e) => eprintln!("not browsing mDNS: {e}"),
+            Ok(()) => {}
         }
         Ok(ExitCode::SUCCESS)
     }
