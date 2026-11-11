@@ -77,7 +77,11 @@ pub struct Registration {
 
 impl Drop for Registration {
     fn drop(&mut self) {
-        let _ = command(&self.socket, SET_EXT_ADV_ENABLE, &enable(false, self.handle));
+        let _ = command(
+            &self.socket,
+            SET_EXT_ADV_ENABLE,
+            &enable(false, self.handle),
+        );
         let _ = command(&self.socket, REMOVE_ADV_SET, &[self.handle]);
     }
 }
@@ -98,7 +102,11 @@ fn start(socket: Arc<OwnedFd>, advert: Advert) -> io::Result<Registration> {
     let _ = command(&socket, REMOVE_ADV_SET, &[handle]);
 
     command(&socket, SET_EXT_ADV_PARAMS, &params(handle))?;
-    command(&socket, SET_EXT_ADV_DATA, &data_command(handle, &adv_data(advert)))?;
+    command(
+        &socket,
+        SET_EXT_ADV_DATA,
+        &data_command(handle, &adv_data(advert)),
+    )?;
     command(&socket, SET_EXT_SCAN_RSP, &data_command(handle, &[]))?;
     command(&socket, SET_EXT_ADV_ENABLE, &enable(true, handle))?;
     Ok(Registration { socket, handle })
@@ -163,9 +171,10 @@ fn controller() -> io::Result<u16> {
         }
     }
     found.sort_unstable();
-    found.into_iter().next().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "no Bluetooth controller")
-    })
+    found
+        .into_iter()
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no Bluetooth controller"))
 }
 
 #[allow(unsafe_code)]
@@ -335,6 +344,9 @@ mod tests {
         // Another command's answer, and a successful Command Status.
         assert_eq!(parse_event(&complete(0), SET_EXT_ADV_DATA), None);
         assert_eq!(parse_event(&[0x04, 0x0f, 4, 0, 1, lo, hi], op), None);
-        assert_eq!(parse_event(&[0x04, 0x0f, 4, 1, 1, lo, hi], op), Some(Err(1)));
+        assert_eq!(
+            parse_event(&[0x04, 0x0f, 4, 1, 1, lo, hi], op),
+            Some(Err(1))
+        );
     }
 }
