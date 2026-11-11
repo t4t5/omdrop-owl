@@ -33,7 +33,7 @@ Accepting Block Ack (AWDL-15) only helps where the hardware answers A-MPDUs itse
 
 **OWLY-2** (SHOULD) A node SHOULD send each valid peer an ICMPv6 echo request, link-local to link-local, every 3 s, which makes Apple peers learn its neighbor entry. Its replies need not reach the IP stack.
 
-- **Finding a receiving iPhone (DISC-5):** an iPhone's mDNS doesn't reach a Linux node's `awdl0`, so Owly's sender also tries `/Discover` at each AWDL peer while it advertises over BLE, and keeps trying until the phone wakes.
+- **Finding a receiving iPhone (DISC-5):** an iPhone's mDNS doesn't reach a Linux node's `awdl0`, so Owly's sender also tries `/Discover` at each AWDL peer while it advertises over BLE, and keeps trying until the phone wakes. `owly browse` does the same when owlyd has the radio up.
 - **Early SYNs (AWDL-18):** `owly-awdl` hands packets to the kernel's IP stack, whose SYN-ACK would wait on neighbor discovery, which AWDL doesn't carry. So it holds the SYN until the peer's neighbor entry exists.
 - **MAC address (AWDL-2):** if udev or NetworkManager rewrites `awdl0`'s MAC address, peers connect to an address the interface doesn't have. `owly-radio` pins it for the session.
 - **Firewall (NET-4):** host firewalls must let TCP `8771` in from `fe80::/10` on `awdl0`. `owly-radio`'s probe warns when ufw is on, `omdrop firewall install` adds the rule, and the NixOS module opens the port.
