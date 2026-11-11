@@ -101,6 +101,15 @@ issues = [
 ]
 notes = "Intel Dual Band Wireless-AC 7265 (Zenbook UX305CA, 8086:095a, kernel 7.2.5)."
 
+[devices."8086:24fb"]
+status = "broken"
+mode = "exclusive"
+channels = [6]
+issues = [
+    "This Intel Wireless-AC 3168's firmware (3168-29) asserts on every ad-hoc start (https://github.com/t4t5/owly/issues/109).",
+]
+notes = "Intel Dual Band Wireless-AC 3168NGW (ASUS S2 Air Series PF4NU1F, 8086:24fb, kernel 6.18.55). The same assert as the 7265 (#16): ADVANCED_SYSASSERT 0x102C, data1 0x20A."
+
 [devices."8086:24f3"]
 status = "broken"
 mode = "exclusive"

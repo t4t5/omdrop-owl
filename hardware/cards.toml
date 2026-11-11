@@ -223,6 +223,13 @@ status = "❌ Exclusive: firmware asserts on every ad-hoc start ([#16](https://g
 tested_on = ["Zenbook UX305CA, `8086:095a`, Omarchy 4.0.4 (kernel 7.2.5)"]
 
 [[card]]
+name = "Intel Dual Band Wireless-AC 3168"
+driver = "iwlwifi"
+ids = ["8086:24fb"]
+status = "❌ Exclusive: firmware asserts on every ad-hoc start, like the 7265 ([#109](https://github.com/t4t5/owly/issues/109))"
+tested_on = ["ASUS S2 Air Series PF4NU1F, `8086:24fb`, EndeavourOS (kernel 6.18.55)"]
+
+[[card]]
 name = "Intel Wireless-AC 8260"
 driver = "iwlwifi"
 ids = ["8086:24f3"]

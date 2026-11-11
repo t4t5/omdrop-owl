@@ -139,6 +139,7 @@ Make sure you set your phone's Airdrop setting to "Everyone for 10 minutes".
 | Qualcomm WCN6855 (QCNFA765) | `ath11k_pci` | ❌ Can't create the monitor interface both modes need ([#45](https://github.com/t4t5/owly/issues/45)) | ThinkPad, `17cb:1103`, CachyOS (kernel 7.2.9) |
 | Qualcomm WCN7850 (FastConnect 7800) | `ath12k_wifi7_pci` | ❌ Shared: receives nothing from the phone ([#40](https://github.com/t4t5/owly/issues/40)); exclusive untested | `17cb:1107`, Fedora 44 (kernel 7.2.9) |
 | Intel Dual Band Wireless-AC 7265 | `iwlwifi` | ❌ Exclusive: firmware asserts on every ad-hoc start ([#16](https://github.com/t4t5/owly/issues/16)) | Zenbook UX305CA, `8086:095a`, Omarchy 4.0.4 (kernel 7.2.5) |
+| Intel Dual Band Wireless-AC 3168 | `iwlwifi` | ❌ Exclusive: firmware asserts on every ad-hoc start, like the 7265 ([#109](https://github.com/t4t5/owly/issues/109)) | ASUS S2 Air Series PF4NU1F, `8086:24fb`, EndeavourOS (kernel 6.18.55) |
 | Intel Wireless-AC 8260 | `iwlwifi` | ❌ Exclusive: firmware resets on channel 44; no transfer on 6 | NUC6i7KYK, `8086:24f3`, Home Assistant OS (kernel 6.12) |
 | Intel Dual Band Wireless-AC 8265 | `iwlwifi` | ❌ Exclusive: firmware resets about 10 s after the ad-hoc cell starts; through a hidden AP, nothing heard from the phone | EliteBook x360 1030 G3, `8086:24fd`, Manjaro (kernel 6.12) |
 
