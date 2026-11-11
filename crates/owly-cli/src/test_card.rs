@@ -6,9 +6,11 @@
 //! alone, pings the gateway for a baseline, opens a window, waits for the
 //! phone, has the tester send a photo each way, closes the window, and then
 //! watches the station for the drop some drivers show after teardown. The
-//! photos go through omdrop-core where it's installed (`omdrop on`, `omdrop
-//! send`), whose hooks take the radio from owlyd; otherwise this takes the
-//! radio itself, and runs this binary's own `owly receive` and `owly send`.
+//! photos go through omdrop where it's installed (`omdrop on`, `omdrop
+//! send`), whose hooks take the radio from owlyd, and the report says
+//! whether omdrop-core or the Python implementation answered; otherwise this
+//! takes the radio itself, and runs this binary's own `owly receive` and
+//! `owly send`.
 //!
 //! The report names the card, the machine it's in, the driver, kernel, mode
 //! and each step's result and timing. It holds no MAC or IP address, the
@@ -66,8 +68,9 @@ struct Report {
     status: Option<String>,
     mode: Option<String>,
     channel: Option<u64>,
-    /// How the photos went: `omdrop-core`, `owly` or `none`.
-    transfers: &'static str,
+    /// How the photos went: `owly`, `none`, or the omdrop implementation
+    /// that answered, such as `omdrop-core 0.1.7` or `omdrop 0.18.2`.
+    transfers: String,
     steps: Vec<Step>,
     wifi: Wifi,
 }
@@ -148,7 +151,7 @@ pub async fn run(bus: Option<&str>, args: Args) -> Result<ExitCode, String> {
         kernel: read("/proc/sys/kernel/osrelease"),
         os: os_name(),
         machine: machine(),
-        transfers: "none",
+        transfers: "none".into(),
         ..Report::default()
     };
 
@@ -189,9 +192,9 @@ pub async fn run(bus: Option<&str>, args: Args) -> Result<ExitCode, String> {
         Path_::None
     };
     report.transfers = match path {
-        Path_::Omdrop => "omdrop-core",
-        Path_::Owly(_) => "owly",
-        Path_::None => "none",
+        Path_::Omdrop => omdrop_implementation().await,
+        Path_::Owly(_) => "owly".into(),
+        Path_::None => "none".into(),
     };
 
     let gateway = gateway(&station).await;
@@ -425,6 +428,32 @@ fn os_name() -> String {
         .find_map(|l| l.strip_prefix("PRETTY_NAME="))
         .map(|v| v.trim_matches('"').to_string())
         .unwrap_or_default()
+}
+
+/// Which implementation answers `omdrop` commands. omdrop runs the
+/// Python one unless omdrop-core is installed and chosen, so a command on
+/// PATH doesn't say: `omdrop version` adds an `omdrop-core` line for core.
+async fn omdrop_implementation() -> String {
+    let out = Command::new("omdrop").arg("version").output().await;
+    implementation(&out.map_or_else(
+        |_| String::new(),
+        |o| String::from_utf8_lossy(&o.stdout).into_owned(),
+    ))
+}
+
+/// `omdrop-core 0.1.7` where `omdrop version` lists core, else `omdrop
+/// 0.18.2`, else `omdrop`.
+fn implementation(version: &str) -> String {
+    let line = |name: &str| {
+        version
+            .lines()
+            .map(str::trim)
+            .find(|l| l.split_whitespace().next() == Some(name))
+    };
+    line("omdrop-core")
+        .or_else(|| line("omdrop"))
+        .unwrap_or("omdrop")
+        .to_string()
 }
 
 fn which(program: &str) -> bool {
@@ -879,6 +908,14 @@ no answer yet for icmp_seq=5
             }
         );
         assert_eq!(pings("").sent, 0);
+    }
+
+    #[test]
+    fn the_omdrop_implementation_comes_from_its_version() {
+        let core = "omdrop 0.18.2\nomdrop-core 0.1.7\n";
+        assert_eq!(implementation(core), "omdrop-core 0.1.7");
+        assert_eq!(implementation("omdrop 0.18.2\n"), "omdrop 0.18.2");
+        assert_eq!(implementation(""), "omdrop");
     }
 
     #[test]
