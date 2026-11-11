@@ -369,7 +369,10 @@ fn tested_on(card: &Card, reports: &[&Report]) -> String {
         }
         let mut chosen: Vec<_> = seen.into_values().collect();
         chosen.sort_by_key(|r| r.time);
-        lines.extend(chosen.into_iter().map(machine_line));
+        // Name the mode only where the reports differ in it.
+        let modes: BTreeSet<_> = chosen.iter().map(|r| r.mode.as_deref()).collect();
+        let with_mode = modes.len() > 1;
+        lines.extend(chosen.into_iter().map(|r| machine_line(r, with_mode)));
     }
     match lines.len() {
         0 => "—".into(),
@@ -382,8 +385,9 @@ fn tested_on(card: &Card, reports: &[&Report]) -> String {
     }
 }
 
-/// `XPS 13, `8086:51f0`, Arch Linux (kernel 7.2.5)`, with what didn't work.
-fn machine_line(r: &Report) -> String {
+/// `XPS 13, `8086:51f0`, Arch Linux (kernel 7.2.5)`, with the mode if
+/// `with_mode` and what didn't work.
+fn machine_line(r: &Report, with_mode: bool) -> String {
     let mut parts = Vec::new();
     if let Some(m) = r
         .machine
@@ -403,6 +407,9 @@ fn machine_line(r: &Report) -> String {
         (false, true) => parts.push(os.to_string()),
         (true, false) => parts.push(format!("kernel {kernel}")),
         (true, true) => {}
+    }
+    if let Some(mode) = r.mode.as_deref().filter(|_| with_mode) {
+        parts.push(mode_name(mode).to_lowercase());
     }
     let mut line = parts.join(", ");
     match r.verdict() {
@@ -692,6 +699,14 @@ ids = ["17cb:1103"]
             rows(&t)[0],
             "| Intel AX211 | `iwlwifi` | ✅ Exclusive | • XPS 9320, `8086:51f0`, Arch (kernel 7.2.3)<br>• Dell XPS 13, `8086:51f1`, Arch Linux (kernel 7.2.5)<br>• Dell XPS 13, `8086:51f0`, Arch Linux (kernel 7.2.5): fails at \"phone heard\" |"
         );
+    }
+
+    #[test]
+    fn reports_in_different_modes_say_which() {
+        let mut shared = report("8086:51f1", "iwlwifi", 2, FAIL);
+        shared.mode = Some("shared".into());
+        let t = render(vec![report("8086:51f1", "iwlwifi", 1, PASS), shared]).unwrap();
+        assert!(t.contains("<br>• Dell XPS 13, `8086:51f1`, Arch Linux (kernel 7.2.5), exclusive<br>• Dell XPS 13, `8086:51f1`, Arch Linux (kernel 7.2.5), shared: fails at \"phone heard\" |"), "{t}");
     }
 
     #[test]
