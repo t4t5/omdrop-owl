@@ -41,7 +41,7 @@ const NM_DIRS: [&str; 2] = ["/usr/sbin", "/sbin"];
 pub struct Args {
     /// How long to watch Wi-Fi after teardown, in seconds (0 skips the
     /// watch).
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = 60)]
     watch: u32,
     /// What to send to the phone (default: a generated test image).
     #[arg(long)]

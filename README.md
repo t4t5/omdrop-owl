@@ -162,7 +162,7 @@ This says which mode the card runs in, what's in the way (an AP on the wrong cha
 owly test-card
 ```
 
-This walks you through a photo each way with an iPhone, watches Wi-Fi for five minutes, and writes a JSON report. Open a pull request adding it to [`hardware/reports/`](hardware/README.md), or attach it to an issue.
+This walks you through a photo each way with an iPhone, watches Wi-Fi for a minute, and writes a JSON report. Open a pull request adding it to [`hardware/reports/`](hardware/README.md), or attach it to an issue.
 
 A card with no entry in `drivers.toml` gets the `*` entry, which runs only with `allow_untested = true`. Cards that can inject frames from a monitor interface while connected to Wi-Fi are the likely candidates for shared mode. Most mac80211 drivers can, but how they behave around it varies, which is what `drivers.toml` records. To try other settings, copy the `*` entry to `/etc/owly/drivers.toml` under your driver's name (`basename $(readlink /sys/class/net/<wifi>/device/driver)`) and change it there.
 
