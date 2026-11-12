@@ -28,8 +28,9 @@ const SET_EXT_ADV_ENABLE: u16 = le(0x0039);
 const READ_NUM_ADV_SETS: u16 = le(0x003b);
 const REMOVE_ADV_SET: u16 = le(0x003c);
 
-/// How long a command may take to complete.
-const COMMAND_TIMEOUT_MS: u16 = 2000;
+/// How long a command may take to complete. With the radio busy, each can
+/// take around two seconds to be answered.
+const COMMAND_TIMEOUT_MS: u16 = 10_000;
 
 #[repr(C)]
 struct SockaddrHci {
@@ -97,11 +98,14 @@ fn start(socket: Arc<OwnedFd>, advert: Advert) -> io::Result<Registration> {
     // Handles run 0x00..=0xef.
     let handle = count.min(0xf0) - 1;
 
-    // A set left by an earlier run that didn't clean up.
-    let _ = command(&socket, SET_EXT_ADV_ENABLE, &enable(false, handle));
-    let _ = command(&socket, REMOVE_ADV_SET, &[handle]);
+    // Each command can cost seconds, so only clear a set an earlier run left
+    // behind if the parameters are refused.
+    if command(&socket, SET_EXT_ADV_PARAMS, &params(handle)).is_err() {
+        let _ = command(&socket, SET_EXT_ADV_ENABLE, &enable(false, handle));
+        let _ = command(&socket, REMOVE_ADV_SET, &[handle]);
+        command(&socket, SET_EXT_ADV_PARAMS, &params(handle))?;
+    }
 
-    command(&socket, SET_EXT_ADV_PARAMS, &params(handle))?;
     command(
         &socket,
         SET_EXT_ADV_DATA,
