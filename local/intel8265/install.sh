@@ -7,6 +7,7 @@ TASK_DAEMON="$TASK_ROOT/target/release/owlyd"
 TASK_CONFIG=/etc/owly/radio.toml
 TASK_DROPIN=/etc/systemd/system/owlyd.service.d/8265-workaround.conf
 TASK_DEST=/usr/local/lib/owly-8265/owlyd
+TASK_ROUTE_HELPER=/usr/local/lib/owly-8265/ensure-link-local-route.py
 
 case "${1:-}" in
     ''|--check) ;;
@@ -29,6 +30,7 @@ PY
 if [ "${1:-}" = --check ]; then
     echo "Ready: install the patched daemon at $TASK_DEST"
     echo "Set owlyd's ExecStart through $TASK_DROPIN"
+    echo "Keep AirDrop's scoped local IPv6 route ahead of the VPN reject rule."
     echo "Enable experimental hardware in $TASK_CONFIG and restart owlyd."
     exit 0
 fi
@@ -36,19 +38,21 @@ fi
 
 TASK_BACKUP="/var/backups/owly-8265-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 install -d -m 0755 "$TASK_BACKUP"
-for TASK_EXISTING in "$TASK_CONFIG" "$TASK_DROPIN" "$TASK_DEST"; do
+for TASK_EXISTING in "$TASK_CONFIG" "$TASK_DROPIN" "$TASK_DEST" "$TASK_ROUTE_HELPER"; do
     if [ -f "$TASK_EXISTING" ]; then
         cp -p -- "$TASK_EXISTING" "$TASK_BACKUP/$(basename -- "$TASK_EXISTING")"
     fi
 done
 install -D -m 0755 "$TASK_DAEMON" "$TASK_DEST"
+install -D -m 0755 "$TASK_ROOT/local/intel8265/ensure-link-local-route.py" "$TASK_ROUTE_HELPER"
 if [ ! -e "$TASK_CONFIG" ]; then
     install -d -m 0755 /etc/owly
     printf '%s\n' '# Local Intel 8265 firmware workaround (PR #117).' 'allow_untested = true' > "$TASK_CONFIG"
     chmod 0644 "$TASK_CONFIG"
 fi
 install -d -m 0755 /etc/systemd/system/owlyd.service.d
-printf '%s\n' '[Service]' 'ExecStart=' "ExecStart=$TASK_DEST" > "$TASK_DROPIN"
+printf '%s\n' '[Service]' "ExecStartPre=/usr/bin/python3 $TASK_ROUTE_HELPER" \
+    'ExecStart=' "ExecStart=$TASK_DEST" > "$TASK_DROPIN"
 chmod 0644 "$TASK_DROPIN"
 systemctl daemon-reload
 systemctl restart owlyd

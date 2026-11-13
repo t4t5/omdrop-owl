@@ -31,9 +31,19 @@ directory under `/var/backups/owly-8265-*` before installation. An existing
 radio configuration must already contain `allow_untested = true`; the script
 will stop instead of replacing other settings.
 
+This machine also has a VPN rule at IPv6 priority 9000 that rejects traffic
+before the main routing table. Packet capture showed the Mac's TCP SYNs
+arriving on port 8771 without a reply. A rule at priority 8990 now selects
+the main table only for `fe80::/64` traffic explicitly scoped to `awdl0`.
+The service's `ExecStartPre` helper ensures this rule exists after a reboot.
+It preserves other rules and refuses to use an occupied priority. The rule
+stays detached while `awdl0` is absent, and affects neither global IPv6
+destinations nor other output interfaces.
+
 To select the packaged daemon again, edit the drop-in so its last line reads
 `ExecStart=/usr/lib/owly/owlyd`, then run `sudo systemctl daemon-reload` and
-`sudo systemctl restart owlyd`. To restore experimental hardware blocking,
+`sudo systemctl restart owlyd`. Omit the local `ExecStartPre` line to stop
+recreating the scoped routing exception at service startup. To restore experimental hardware blocking,
 set `allow_untested = false` in `/etc/owly/radio.toml`.
 
 ## Receive from a Mac
@@ -57,8 +67,15 @@ the request in the receiving terminal. Stop both commands with Ctrl+C.
 The laptop's normal Wi-Fi disconnects while the radio is running. The firmware
 restart causes approximately one second of interruption every ten seconds;
 large transfers can need a retry. A passing simulation is not proof of a
-successful transfer on this card. The published results use an iPhone;
-Mac interoperability still needs a real transfer test.
+successful transfer on this card. The published hardware results use an iPhone.
+On this machine, a MacBook Pro running macOS 27.0.1 successfully completed
+discovery and offered CHANGELOG.md after the routing exception was added.
+Completed file reception still needs confirmation.
+
+For a bounded test in a local terminal (including an interactive acceptance
+prompt), run `bash local/intel8265/receive-test.sh`. It waits for the radio's
+D-Bus session before starting discovery and keeps `timeout` in the foreground
+so terminal input can reach the receiver.
 
 ## Validation on this machine
 
@@ -72,3 +89,7 @@ Mac interoperability still needs a real transfer test.
 - The native kernel integration test cannot run under this machine's current
   user-namespace restrictions (`unshare: ... uid_map: Operation not permitted`).
   The host security policy was left unchanged.
+- `local/intel8265/test-routing.sh` passed in isolated network namespaces:
+  the exception allows scoped AirDrop replies, preserves blocking for global
+  IPv6 and other interfaces, is idempotent, and refuses an occupied priority
+  without changing existing rules.
