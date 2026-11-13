@@ -818,6 +818,57 @@ async fn exclusive_mode_runs_an_ad_hoc_cell() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn intel_8265_rejoins_the_cell_without_restarting_awdl_and_stops_cleanly() {
+    let fx = Fx::with(|o| {
+        intel(o);
+        o.device = Some("8086:24fd".into());
+    });
+    // Keep the real device's configuration, shortening only the timer.
+    let overrides = fx.dir.path().join("drivers.toml");
+    std::fs::write(
+        &overrides,
+        owly_radio::quirks::PACKAGED.replace("ibss_rejoin_secs = 9", "ibss_rejoin_secs = 1"),
+    )
+    .unwrap();
+    let mut settings = fx.settings();
+    settings.allow_untested = true;
+    settings.quirks = Quirks::load(&overrides).unwrap();
+    let mut backend = fx.backend_with(settings);
+    let link = backend.up().await.unwrap();
+    assert!(fx.awdl().unicast_groups);
+    let initial_calls = fx.ops.calls().len();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if fx
+                .since(initial_calls)
+                .contains(&format!("join {IBSS} 2437"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the 8265's cell was never rejoined");
+    assert_eq!(
+        fx.since(initial_calls),
+        [format!("leave {IBSS}"), format!("join {IBSS} 2437")]
+    );
+    assert!(fx.awdl_running());
+    assert!(fx.ops.awdl());
+    assert_eq!(*link.state.borrow(), LinkState::Up);
+
+    backend.down().await.unwrap();
+    let after_stop = fx.ops.calls();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(fx.ops.calls(), after_stop, "rejoining continued after stop");
+    assert!(!fx.awdl_running());
+    assert!(!fx.ops.awdl());
+    assert_eq!(fx.journal(), None);
+    assert_eq!(fx.ops.kind(STATION).as_deref(), Some("managed"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn exclusive_mode_tries_each_channel_in_order() {
     // An RTL8822BE starts no cell on 5 GHz: 44 and 149 fail, 6 works.
     let fx = Fx::with(|o| {
